@@ -788,5 +788,5 @@ class SimPLeLearner:
             self.logger.log_stat("simple_training_iterations", self.training_iterations, t_env)
             self.logger.log_stat("model_episodes", self.model_episodes, t_env)
             self.logger.log_stat("model_epsilon", self.mac.action_selector.epsilon, t_env)
-            self.logger.log_stat("env_epsilon", self.mac.env_action_selector.epsilon, t_env)
+            #self.logger.log_stat("env_epsilon", self.mac.env_action_selector.epsilon, t_env)
             self.log_stats_t = t_env

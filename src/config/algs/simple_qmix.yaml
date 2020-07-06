@@ -1,19 +1,19 @@
 # --- QMIX specific parameters ---
+mac: "simple_mac"
 
 # epsilon greedy action selector for policy learner
 action_selector: "epsilon_greedy"
 epsilon_start: 1.0
 epsilon_finish: 0.05
-epsilon_anneal_time: 2500
+epsilon_anneal_time: 50000
 epsilon_delay: 0
 
 # epsilon greedy action selector for model learner
-mac: "simple_mac"
 model_action_selector: "model_epsilon_greedy" # used by by model learner on real env
 model_epsilon_start: 1.0
-model_epsilon_finish: 0.5
+model_epsilon_finish: 0.05
 model_epsilon_anneal_time: 50000
-model_epsilon_delay: 30000 # start epsilon decay on env action selection after initial samples have been collected
+model_epsilon_delay: 60000 # start epsilon decay on env action selection after initial samples have been collected
 
 buffer_size: 5000
 
@@ -33,15 +33,15 @@ hypernet_embed: 64
 model_learner: "simple_learner"
 model_rollout_batch_size: 1 # batch of rollouts to add to model_buffer
 model_buffer_size: 5000
-model_min_training_episodes: 256
-model_policy_training_interval: 1024 # train model after every n real episodes
+model_min_training_episodes: 2048
+model_policy_training_interval: 2048 # train model after every n real episodes
 model_policy_improvement_steps: 1
 model_policy_test_interval: 1
 model_training_test_ratio: 0.1
 
 # environment state model learning
-state_model_initial_train_epochs: 200
-state_model_train_epochs: 200
+state_model_initial_train_epochs: 1500
+state_model_train_epochs: 1500
 state_model_train_log_epochs: 100
 state_model_train_batch_size: 128
 state_model_learning_rate: 0.01
@@ -49,8 +49,8 @@ state_model_grad_clip_norm: 0.1
 state_model_hidden_dim: 128
 
 # environment observation model learning
-obs_model_initial_train_epochs: 200
-obs_model_train_epochs: 200
+obs_model_initial_train_epochs: 1500
+obs_model_train_epochs: 1500
 obs_model_train_log_epochs: 100
 obs_model_train_batch_size: 128
 obs_model_learning_rate: 0.01
@@ -62,10 +62,10 @@ obs_model_hidden_dim: 128
 # obs_model_include_last_action: True
 obs_model_use_mask: True # there are no obs after termination so may as well exclude learning those timesteps
 
-name: "simple-qmix-bs-1-develop"
+name: "simple-qmix-develop-b1"
 
-runner: episode
-batch_size_run: 1
+runner: parallel
+batch_size_run: 32
 
 save_episodes: False
 episode_dir: episodes
@@ -75,5 +75,6 @@ test_interval: 1000
 log_interval: 1000
 runner_log_interval: 1000
 learner_log_interval: 1000
-
+t_max: 200000
 save_model: False
+

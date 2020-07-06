@@ -191,8 +191,9 @@ def run_sequential(args, logger):
         if model_learner:
 
             # collect real episodes
+            #print(f"Collecting {args.batch_size_run} episodes from REAL ENV using epsilon: {runner.mac.env_action_selector.epsilon:.2f}, t_env: {runner.t_env}")
             print(
-                f"Collecting {args.batch_size_run} episodes from REAL ENV using epsilon: {runner.mac.env_action_selector.epsilon:.2f}, t_env: {runner.t_env}")
+                f"Collecting {args.batch_size_run} episodes from REAL ENV using epsilon: {runner.mac.action_selector.epsilon:.2f}, t_env: {runner.t_env}")
             episode_batch = runner.run(test_mode=False)
             buffer.insert_episode_batch(episode_batch)
             buffer_new_episodes += episode_batch.batch_size
