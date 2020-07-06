@@ -31,8 +31,9 @@ hypernet_embed: 64
 
 # model learning
 model_learner: "simple_learner"
-model_rollout_batch_size: 1 # batch of rollouts to add to model_buffer
-model_rollouts: 1
+model_rollout_batch_size: 64 # batch of rollouts to add to model_buffer
+model_rollout_before_rl: True
+model_rollouts: 512
 model_buffer_size: 5000
 model_reuse_existing: True
 model_n_collect_episodes: 128
@@ -62,7 +63,7 @@ obs_model_hidden_dim: 128
 # obs_model_include_last_action: True
 obs_model_use_mask: True # there are no obs after termination so may as well exclude learning those timesteps
 
-name: "simple-qmix-bs-1-develop-live"
+name: "simple-qmix-develop-a2"
 
 runner: parallel
 batch_size_run: 32
