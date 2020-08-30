@@ -2,6 +2,7 @@ from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
 import numpy as np
+import torch
 
 
 class EpisodeRunner:
@@ -26,6 +27,11 @@ class EpisodeRunner:
         # Log the first run
         self.log_train_stats_t = -1000000
 
+        # for fixed policies
+        if self.args.fix_actions:
+            self.actions = []
+            self.episode_actions_complete = False
+
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
                                  preprocess=preprocess, device=self.args.device)
@@ -35,6 +41,7 @@ class EpisodeRunner:
         return self.env.get_env_info()
 
     def save_replay(self):
+        print("saving replay")
         self.env.save_replay()
 
     def close_env(self):
@@ -67,6 +74,13 @@ class EpisodeRunner:
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env,
                                               test_mode=test_mode)
 
+            if self.args.fix_actions:
+                if self.episode_actions_complete:
+                    actions = self.actions[self.t]
+                else:
+                    self.actions.append(actions)
+            #print(self.t, actions, pre_transition_data["state"][0][0], pre_transition_data["state"][0][5])
+
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
 
@@ -79,6 +93,9 @@ class EpisodeRunner:
             self.batch.update(post_transition_data, ts=self.t)
 
             self.t += 1
+
+        if self.args.fix_actions and not self.episode_actions_complete:
+            self.episode_actions_complete = True
 
         last_data = {
             "state": [self.env.get_state()],
@@ -98,7 +115,7 @@ class EpisodeRunner:
         cur_stats["n_episodes"] = 1 + cur_stats.get("n_episodes", 0)
         cur_stats["ep_length"] = self.t + cur_stats.get("ep_length", 0)
 
-        if not test_mode:
+        if not test_mode or self.args.force_test_mode:
             self.t_env += self.t
 
         cur_returns.append(episode_return)

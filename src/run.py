@@ -254,7 +254,7 @@ def run_sequential(args, logger):
                 logger.log_stat("model_rl_iterations", rl_iterations, runner.t_env)
 
         else:
-            episode_batch = runner.run(test_mode=False)
+            episode_batch = runner.run(test_mode=args.force_test_mode)
             buffer.insert_episode_batch(episode_batch)
 
             if buffer.can_sample(args.batch_size):
@@ -267,7 +267,8 @@ def run_sequential(args, logger):
                 if episode_sample.device != args.device:
                     episode_sample.to(args.device)
 
-                learner.train(episode_sample, runner.t_env, episode)
+                if not args.no_train:
+                    learner.train(episode_sample, runner.t_env, episode)
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
