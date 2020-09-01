@@ -34,6 +34,11 @@ def my_main(_run, _config, _log):
     # run the framework
     run(_run, config, _log)
 
+def _get_param(params, arg_name, default=""):
+    for _i, _v in enumerate(params):
+        if _v.split("=")[0] == arg_name:
+            return _v.split("=")[1]
+    return default
 
 def _get_config(params, arg_name, subfolder):
     config_name = None
@@ -91,8 +96,17 @@ if __name__ == '__main__':
     ex.add_config(config_dict)
 
     # Save to disk by default for sacred
-    logger.info("Saving to FileStorageObserver in results/sacred.")
+    key = "local_results_path"
+    local_results_path = _get_param(params, "local_results_path")
+    local_results_path = local_results_path if local_results_path else config_dict[key]
+
+    if local_results_path:
+        results_path = local_results_path
+    else:
+        config_dict[key] = results_path
     file_obs_path = os.path.join(results_path, "sacred")
+    logger.info(f"Saving to FileStorageObserver in {file_obs_path}.")
+
     ex.observers.append(FileStorageObserver.create(file_obs_path))
 
     ex.run_commandline(params)
