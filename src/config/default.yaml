@@ -54,6 +54,3 @@ model_learner: null
 save_episodes: False
 episode_dir: episodes
 clear_existing_episodes: True
-force_test_mode: False
-no_train: False
-fix_actions: False

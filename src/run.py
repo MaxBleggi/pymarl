@@ -63,10 +63,13 @@ def run(_run, _config, _log):
     # Making sure framework really exits
     os._exit(os.EX_OK)
 
-def evaluate_sequential(args, runner):
+# TODO: need a way to save episodes that is separate from the buffer, i.e performs similar preprocessing
+def evaluate_sequential(args, runner, buffer):
 
     for _ in range(args.test_nepisode):
-        runner.run(test_mode=True)
+        episode_batch = runner.run(test_mode=True)
+        if args.save_episodes:
+            buffer.insert_episode_batch(episode_batch)
 
     if args.save_replay:
         runner.save_replay()
@@ -161,7 +164,7 @@ def run_sequential(args, logger):
         runner.t_env = timestep_to_load
 
         if args.evaluate or args.save_replay:
-            evaluate_sequential(args, runner)
+            evaluate_sequential(args, runner, buffer)
             return
 
         # TODO checkpoints for model_learner
@@ -254,7 +257,7 @@ def run_sequential(args, logger):
                 logger.log_stat("model_rl_iterations", rl_iterations, runner.t_env)
 
         else:
-            episode_batch = runner.run(test_mode=args.force_test_mode)
+            episode_batch = runner.run(test_mode=False)
             buffer.insert_episode_batch(episode_batch)
 
             if buffer.can_sample(args.batch_size):
@@ -267,8 +270,7 @@ def run_sequential(args, logger):
                 if episode_sample.device != args.device:
                     episode_sample.to(args.device)
 
-                if not args.no_train:
-                    learner.train(episode_sample, runner.t_env, episode)
+                learner.train(episode_sample, runner.t_env, episode)
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
