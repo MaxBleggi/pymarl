@@ -2,7 +2,6 @@ from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
 import numpy as np
-import torch
 
 
 class EpisodeRunner:
@@ -36,7 +35,6 @@ class EpisodeRunner:
         return self.env.get_env_info()
 
     def save_replay(self):
-        print("saving replay")
         self.env.save_replay()
 
     def close_env(self):
@@ -66,8 +64,7 @@ class EpisodeRunner:
 
             # Pass the entire batch of experiences up till now to the agents
             # Receive the actions for each agent at this timestep in a batch of size 1
-            actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env,
-                                              test_mode=test_mode)
+            actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
 
             reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
@@ -76,6 +73,7 @@ class EpisodeRunner:
                 "actions": actions,
                 "reward": [(reward,)],
                 "terminated": [(terminated != env_info.get("episode_limit", False),)],
+                "battle_won": [(env_info.get("battle_won", False),)],
             }
 
             self.batch.update(post_transition_data, ts=self.t)
@@ -105,8 +103,9 @@ class EpisodeRunner:
 
         cur_returns.append(episode_return)
 
-        if test_mode and (len(self.test_returns) == self.args.test_nepisode):
-            self._log(cur_returns, cur_stats, log_prefix)
+        if test_mode:
+            if (len(self.test_returns) == self.args.test_nepisode):
+                self._log(cur_returns, cur_stats, log_prefix)
         elif self.t_env - self.log_train_stats_t >= self.args.runner_log_interval:
             self._log(cur_returns, cur_stats, log_prefix)
             if hasattr(self.mac.action_selector, "epsilon"):
@@ -116,6 +115,7 @@ class EpisodeRunner:
         return self.batch
 
     def _log(self, returns, stats, prefix):
+        print("logging")
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
         self.logger.log_stat(prefix + "return_std", np.std(returns), self.t_env)
         returns.clear()
