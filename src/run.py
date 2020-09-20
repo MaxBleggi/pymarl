@@ -179,22 +179,12 @@ def run_sequential(args, logger):
     start_time = time.time()
     last_time = start_time
 
-    # old stuff
-    # model based learning stuff
-    # model_episodes = 0
-    # model_based_learning_iterations = 0
-    # model_based_learning_step = 0
-    # buffer_new_episodes = 0
-    # model_training_iterations = 0
-    # collect_real_episodes = True
-    # model_trained = False
-    # buffer_dir = "buffers"
-
     # new stuff
     collect_episodes = True
     collected_episodes = 0
     train_rl = False
     rl_iterations = 0
+    model_trained = False
 
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
     while runner.t_env <= args.t_max:
@@ -206,12 +196,13 @@ def run_sequential(args, logger):
                 buffer.insert_episode_batch(episode_batch)
                 collected_episodes += args.batch_size_run
 
-            if collected_episodes >= args.model_n_collect_episodes:
+            if collected_episodes >= args.model_n_collect_episodes if model_trained else args.model_n_collect_episodes_initial:
                 print(f"Collected {collected_episodes} REAL episodes, training ENV model")
                 # stop collection and train model
                 collect_episodes = False
                 collected_episodes = 0
                 model_learner.train(buffer, runner.t_env, plot_test_results=False)
+                model_trained = True
                 train_rl = True
 
                 if args.model_rollout_before_rl:
@@ -232,14 +223,13 @@ def run_sequential(args, logger):
                     model_batch = model_learner.generate_batch(buffer, rollout_batch_size, rl_iterations)
                     model_buffer.insert_episode_batch(model_batch)
 
-
                 if model_buffer.can_sample(args.batch_size):
-                    for _ in range(args.batch_size_run):
+                    for _ in range(args.model_rl_iterations_per_generated_sample):
                         episode_sample = model_buffer.sample(args.batch_size)
 
                         # truncate batch to only filled timesteps
-                        #max_ep_t = episode_sample.max_t_filled()
-                        #episode_sample = episode_sample[:, :max_ep_t]
+                        max_ep_t = episode_sample.max_t_filled()
+                        episode_sample = episode_sample[:, :max_ep_t]
 
                         if episode_sample.device != args.device:
                             episode_sample.to(args.device)
@@ -275,10 +265,12 @@ def run_sequential(args, logger):
                         episode_sample.to(args.device)
 
                     learner.train(episode_sample, runner.t_env, episode)
+                    rl_iterations += 1
+                    print(f"RL iteration {rl_iterations}, t_env: {runner.t_env}")
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
-        if (runner.t_env - last_test_T) / args.test_interval >= 1.0:
+        if (runner.t_env - last_test_T) / args.test_interval >= 1.0 or rl_iterations % args.rl_test_interval == 0:
 
             logger.console_logger.info("t_env: {} / {}".format(runner.t_env, args.t_max))
             logger.console_logger.info("Estimated time left: {}. Time passed: {}".format(
@@ -286,6 +278,9 @@ def run_sequential(args, logger):
             last_time = time.time()
 
             last_test_T = runner.t_env
+
+            runner.t_rl = rl_iterations
+
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
 
@@ -303,6 +298,7 @@ def run_sequential(args, logger):
         episode += args.batch_size_run
 
         if (runner.t_env - last_log_T) >= args.log_interval:
+            logger.log_stat("rl_iterations", rl_iterations, runner.t_env)
             logger.log_stat("episode", episode, runner.t_env)
             logger.print_recent_stats()
             last_log_T = runner.t_env

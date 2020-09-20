@@ -32,6 +32,7 @@ class ParallelRunner:
         self.t = 0
 
         self.t_env = 0
+        self.t_rl = 0 # rl_iterations
 
         self.train_returns = []
         self.test_returns = []
@@ -191,6 +192,10 @@ class ParallelRunner:
 
         n_test_runs = max(1, self.args.test_nepisode // self.batch_size) * self.batch_size
         if test_mode and (len(self.test_returns) == n_test_runs):
+
+            self.logger.log_stat(log_prefix + "rl_return_mean", np.mean(cur_returns), self.t_rl)
+            self.logger.log_stat(log_prefix + "rl_return_std", np.std(cur_returns), self.t_rl)
+
             self._log(cur_returns, cur_stats, log_prefix)
         elif self.t_env - self.log_train_stats_t >= self.args.runner_log_interval:
             self._log(cur_returns, cur_stats, log_prefix)
@@ -203,6 +208,7 @@ class ParallelRunner:
     def _log(self, returns, stats, prefix):
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
         self.logger.log_stat(prefix + "return_std", np.std(returns), self.t_env)
+
         returns.clear()
 
         for k, v in stats.items():
