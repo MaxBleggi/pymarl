@@ -40,6 +40,7 @@ model_reuse_existing: True
 model_n_collect_episodes_initial: 128
 model_n_collect_episodes: 128
 model_update_interval: 128 # update env model after every n policy learning iterations
+max_model_trained: 0
 model_training_test_ratio: 0.1
 
 # environment state model learning

@@ -791,3 +791,13 @@ class SimPLeLearner:
             self.logger.log_stat("model_epsilon", self.mac.action_selector.epsilon, t_env)
             self.logger.log_stat("env_epsilon", self.mac.env_action_selector.epsilon, t_env)
             self.log_stats_t = t_env
+
+    def log_rl_stats(self, t_rl):
+        self.logger.log_stat("rl_state_model_train_loss", self.state_model_train_loss, t_rl)
+        self.logger.log_stat("rl_state_model_val_loss", self.state_model_val_loss, t_rl)
+        self.logger.log_stat("rl_obs_model_train_loss", self.obs_model_train_loss, t_rl)
+        self.logger.log_stat("rl_obs_model_val_loss", self.obs_model_val_loss, t_rl)
+        self.logger.log_stat("rl_simple_training_iterations", self.training_iterations, t_rl)
+        self.logger.log_stat("rl_model_episodes", self.model_episodes, t_rl)
+        self.logger.log_stat("rl_model_epsilon", self.mac.action_selector.epsilon, t_rl)
+        self.logger.log_stat("rl_env_epsilon", self.mac.env_action_selector.epsilon, t_rl)
