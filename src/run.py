@@ -136,29 +136,49 @@ def run_sequential(args, logger):
             model_learner.cuda()
 
     if args.checkpoint_path != "":
-
-        timesteps = []
-        timestep_to_load = 0
-
         if not os.path.isdir(args.checkpoint_path):
             logger.console_logger.info("Checkpoint directiory {} doesn't exist".format(args.checkpoint_path))
             return
 
-        # Go through all files in args.checkpoint_path
-        for name in os.listdir(args.checkpoint_path):
-            full_name = os.path.join(args.checkpoint_path, name)
-            # Check if they are dirs the names of which are numbers
-            if os.path.isdir(full_name) and name.isdigit():
-                timesteps.append(int(name))
+        timestep_to_load = 0
+        if args.rl_checkpoint:
+            rl_timesteps = []
 
-        if args.load_step == 0:
-            # choose the max timestep
-            timestep_to_load = max(timesteps)
+            # Go through all files in args.checkpoint_path
+            for name in os.listdir(args.checkpoint_path):
+                full_name = os.path.join(args.checkpoint_path, name)
+                # Check if they are dirs the names of which are numbers
+                name = name.replace('rl_', '')
+                if os.path.isdir(full_name) and name.isdigit():
+                    rl_timesteps.append(int(name))
+
+            load_step = int(args.load_step.replace('rl_', '')) if isinstance(args.load_step, str) else args.load_step
+            if load_step == 0:
+                # choose the max timestep
+                timestep_to_load = max(rl_timesteps)
+            else:
+                # choose the timestep closest to load_step
+                timestep_to_load = min(rl_timesteps, key=lambda x: abs(x - load_step))
+                model_path = os.path.join(args.checkpoint_path, f"rl_{timestep_to_load}")
+
         else:
-            # choose the timestep closest to load_step
-            timestep_to_load = min(timesteps, key=lambda x: abs(x - args.load_step))
+            timesteps = []
 
-        model_path = os.path.join(args.checkpoint_path, str(timestep_to_load))
+            # Go through all files in args.checkpoint_path
+            for name in os.listdir(args.checkpoint_path):
+                full_name = os.path.join(args.checkpoint_path, name)
+                # Check if they are dirs the names of which are numbers
+                if os.path.isdir(full_name) and name.isdigit():
+                    timesteps.append(int(name))
+
+            if args.load_step == 0:
+                # choose the max timestep
+                timestep_to_load = max(timesteps)
+            else:
+                # choose the timestep closest to load_step
+                timestep_to_load = min(timesteps, key=lambda x: abs(x - args.load_step))
+
+                model_path = os.path.join(args.checkpoint_path, str(timestep_to_load))
 
         logger.console_logger.info("Loading model from {}".format(model_path))
         learner.load_models(model_path)
@@ -308,7 +328,7 @@ def run_sequential(args, logger):
             # use appropriate filenames to do critics, optimizer states
             learner.save_models(save_path)
 
-        if args.save_model and (rl_iterations == 0 or (rl_iterations - rl_model_save_time)/args.rl_save_model_interval >= 1.0):
+        if args.save_model and model_trained and (rl_iterations == 0 or (rl_iterations - rl_model_save_time)/args.rl_save_model_interval >= 1.0):
             print(f"Saving at RL model iteration {rl_iterations}")
             rl_model_save_time = rl_iterations
             save_path = os.path.join(args.local_results_path, "models", args.unique_token, f"rl_{rl_iterations}")
