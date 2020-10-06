@@ -55,5 +55,6 @@ model_learner: null
 
 # --- Debugging params --- #
 save_episodes: False
+save_policy_outputs: False
 episode_dir: episodes
 clear_existing_episodes: True

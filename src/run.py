@@ -281,7 +281,8 @@ def run_sequential(args, logger):
         else:
             episode_batch = runner.run(test_mode=False)
             buffer.insert_episode_batch(episode_batch)
-
+            if args.save_episodes and args.save_policy_outputs and args.runner == "episode":
+                mac.save_policy_outputs()
             if buffer.can_sample(args.batch_size):
                 for _ in range(args.batch_size_run):
                     episode_sample = buffer.sample(args.batch_size)

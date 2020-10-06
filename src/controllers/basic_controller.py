@@ -1,6 +1,9 @@
 from modules.agents import REGISTRY as agent_REGISTRY
 from components.action_selectors import REGISTRY as action_REGISTRY
 import torch as th
+import os
+from glob import glob
+import pickle
 
 
 # This multi-agent controller shares parameters between agents
@@ -16,10 +19,23 @@ class BasicMAC:
 
         self.hidden_states = None
 
+        self.policy_outputs = []
+        self.policy_episode_id = 0
+
+    def save_policy_outputs(self):
+        fname = os.path.join(self.args.episode_dir, f"policy_{self.policy_episode_id + 1:06}.pkl")
+        with open(fname, 'wb') as f:
+            pickle.dump(self.policy_outputs, f)
+        self.policy_episode_id += 1
+        self.policy_outputs = []
+
+
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         # Only select actions for the selected batch elements in bs
         avail_actions = ep_batch["avail_actions"][:, t_ep]
         agent_outputs = self.forward(ep_batch, t_ep, test_mode=test_mode)
+        if self.args.save_policy_outputs:
+            self.policy_outputs.append(agent_outputs)
         chosen_actions = self.action_selector.select_action(agent_outputs[bs], avail_actions[bs], t_env, test_mode=test_mode)
         return chosen_actions
 
