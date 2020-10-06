@@ -1,0 +1,52 @@
+# --- QMIX-MBE specific parameters ---
+# Uses a learned model to guide exploration
+#
+
+
+# use epsilon greedy action selector
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 50000
+
+runner: "episode"
+
+buffer_size: 5000
+
+# update the target network every {} episodes
+target_update_interval: 200
+
+# use the Q_Learner to train
+agent_output_type: "q"
+learner: "q_learner"
+double_q: True
+mixer: "qmix"
+mixing_embed_dim: 32
+hypernet_layers: 2
+hypernet_embed: 64
+
+# models
+model_learner: "mbe"
+dynamics_model_hidden_dim: 256
+representation_model_hidden_dim: 256
+actions_model_hidden_dim: 256
+
+# model learning params
+model_learning_rate: 0.01
+model_grad_clip_norm: 1
+model_batch_size: 256
+model_epochs: 10
+model_log_epochs: 10
+
+# rollouts
+model_rollouts: 256
+model_rollout_batch_size: 256
+
+# action selection
+model_action_selector: "model_epsilon_greedy"
+model_epsilon_start: 1.0
+model_epsilon_finish: 0.5
+model_epsilon_anneal_time: 100000
+model_epsilon_delay: 0
+
+name: "qmix-mbe"

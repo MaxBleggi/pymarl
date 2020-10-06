@@ -117,18 +117,9 @@ def run_sequential(args, logger):
     # Give runner the scheme
     runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
 
-    # Learner
+    # Learners
     learner = le_REGISTRY[args.learner](mac, buffer.scheme, logger, args)
-
-    # Model learner
-    model_learner = None
-    model_buffer = None
-    if args.model_learner:
-        model_learner = le_REGISTRY[args.model_learner](mac, scheme, logger, args)
-        model_buffer = ReplayBuffer(scheme, groups, args.model_buffer_size, buffer.max_seq_length,
-                                    preprocess=preprocess,
-                                    device="cpu" if args.buffer_cpu_only else args.device,
-                                    save_episodes=False)
+    model_learner = le_REGISTRY[args.model_learner](scheme, groups, logger, args) if args.model_learner else None
 
     if args.use_cuda:
         learner.cuda()
