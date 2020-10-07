@@ -16,6 +16,7 @@ from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 
 import pickle
+import numpy as np
 
 def run(_run, _config, _log):
 
@@ -194,6 +195,7 @@ def run_sequential(args, logger):
     while runner.t_env <= args.t_max:
 
         episode_batch = runner.run(test_mode=False)
+        print("Real reward: ", episode_batch['reward'].sum().item())
         buffer.insert_episode_batch(episode_batch)
 
         if buffer.can_sample(args.batch_size):
@@ -209,6 +211,8 @@ def run_sequential(args, logger):
 
                 learner.train(episode_sample, runner.t_env, episode)
                 model_learner.train(buffer, runner.t_env)
+                H, G = model_learner.generate_batch(episode_sample, runner.t_env)
+                print(np.histogram(G.cpu()))
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
