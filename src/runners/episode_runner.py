@@ -3,7 +3,6 @@ from functools import partial
 from components.episode_buffer import EpisodeBatch
 import numpy as np
 
-
 class EpisodeRunner:
 
     def __init__(self, args, logger):
@@ -115,7 +114,6 @@ class EpisodeRunner:
         return self.batch
 
     def _log(self, returns, stats, prefix):
-        print("logging")
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
         self.logger.log_stat(prefix + "return_std", np.std(returns), self.t_env)
         returns.clear()
