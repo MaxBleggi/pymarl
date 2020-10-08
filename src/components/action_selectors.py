@@ -64,7 +64,7 @@ class EpsilonGreedyActionSelector():
 
 REGISTRY["epsilon_greedy"] = EpsilonGreedyActionSelector
 
-class ModelLearnerEpsilonGreedyActionSelector():
+class ModelEpsilonGreedyActionSelector():
 
     def __init__(self, args):
         self.args = args
@@ -92,4 +92,4 @@ class ModelLearnerEpsilonGreedyActionSelector():
         return picked_actions
 
 
-REGISTRY["model_epsilon_greedy"] = ModelLearnerEpsilonGreedyActionSelector
+REGISTRY["model_epsilon_greedy"] = ModelEpsilonGreedyActionSelector

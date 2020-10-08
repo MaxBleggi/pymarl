@@ -191,15 +191,22 @@ def run_sequential(args, logger):
     start_time = time.time()
     last_time = start_time
 
+    # timing operations
+    t_op_start = 0
+
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
     while runner.t_env <= args.t_max:
 
+        #print("Gathering real episode ...")
+        t_op_start = time.time()
         episode_batch = runner.run(test_mode=False)
-        print("Real reward: ", episode_batch['reward'].sum().item())
         buffer.insert_episode_batch(episode_batch)
+        print(
+            f"Real reward: {episode_batch['reward'].sum().item():.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
         if buffer.can_sample(args.batch_size):
             for _ in range(args.batch_size_run):
+                t_op_start = time.time()
                 episode_sample = buffer.sample(args.batch_size)
 
                 # Truncate batch to only filled timesteps
@@ -209,10 +216,17 @@ def run_sequential(args, logger):
                 if episode_sample.device != args.device:
                     episode_sample.to(args.device)
 
+                #print(f"Sample episodes from buffer: {time.time() - t_op_start: .2f} s")
+
+                t_op_start = time.time()
                 learner.train(episode_sample, runner.t_env, episode)
-                model_learner.train(buffer, runner.t_env)
+                #print(f"RL step: {time.time() - t_op_start: .2f} s")
+
+                t_op_start = time.time()
+                model_learner.train(episode_sample, runner.t_env)
                 H, G = model_learner.generate_batch(episode_sample, runner.t_env)
                 print(np.histogram(G.cpu()))
+                print(f"Model step: {time.time() - t_op_start: .2f} s")
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)

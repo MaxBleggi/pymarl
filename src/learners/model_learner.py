@@ -87,15 +87,15 @@ class ModelLearner:
 
         return train_indices, test_indices
 
-    def get_episode_vars(self, ep):
+    def get_episode_vars(self, batch):
 
-        if ep.device != self.device:
-            ep.to(self.device)
+        if batch.device != self.device:
+            batch.to(self.device)
 
         # per-agent quantities
-        obs = ep["obs"][:, :-1, ...]  # observations
-        aa = ep["avail_actions"][:, :-1, ...].float()  # available actions
-        action = ep["actions_onehot"][:, :-1, ...]  # actions taken
+        obs = batch["obs"][:, :-1, ...]  # observations
+        aa = batch["avail_actions"][:, :-1, ...].float()  # available actions
+        action = batch["actions_onehot"][:, :-1, ...]  # actions taken
 
         # flatten per-agent quantities
         nbatch, ntimesteps, _, _ = obs.size()
@@ -104,16 +104,16 @@ class ModelLearner:
         action = action.view(nbatch, ntimesteps, -1)
 
         # state
-        state = ep["state"][:, :-1, :]
+        state = batch["state"][:, :-1, :]
         if self.args.env_args["state_last_action"]:
             state = state[:, :, :self.state_size]
 
         # reward
-        reward = ep["reward"][:, :-1, :]
+        reward = batch["reward"][:, :-1, :]
 
         # termination signal
-        terminated = ep["terminated"][:, :-1].float()
-        term_idx = torch.squeeze(terminated).max(0)[1].item()
+        terminated = batch["terminated"][:, :-1].float()
+        term_idx = terminated.max(1)[1].max().item()
         term_signal = torch.ones_like(terminated)
         term_signal[:, :term_idx, :] = 0
 
@@ -121,8 +121,8 @@ class ModelLearner:
         policy = torch.zeros_like(action)
         with torch.no_grad():
             self.target_mac.init_hidden(nbatch)
-            for t in range(term_idx + 1):
-                policy[:, t, :] = self.target_mac.forward(ep, t=t).flatten()
+            for t in range(terminated.size()[1]):
+                policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
 
         # mask for active timesteps (except for term_signal which is always valid)
         mask = torch.ones_like(terminated)
@@ -136,16 +136,6 @@ class ModelLearner:
         policy *= mask
 
         return state, action, reward, term_signal, obs, aa, policy, mask
-
-    def get_batch(self, episodes, batch_size, use_mask=False):
-        bs = min(batch_size, len(episodes))
-        batch = random.sample(episodes, bs)
-        props = [torch.cat(t) for t in zip(*batch)]
-        if use_mask:
-            mask = props[-1]
-            idx = int(mask.sum(1).max().item())
-            props = [x[:, :idx, :] for x in props]
-        return props
 
     def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, mask):
 
@@ -186,12 +176,11 @@ class ModelLearner:
 
         return yp, (ht, ct)
 
-    def train_models(self, train_episodes, test_episodes):
+    def train_models(self, train_vars, val_vars):
 
-        print(f"Training models ...")
+        #print(f"Training models ...")
 
         # model learning parameters
-        batch_size = min(self.args.model_batch_size, len(test_episodes))
         log_epochs = self.args.model_log_epochs
         use_mask = False # learning a termination signal is easier with unmasked input
 
@@ -207,15 +196,14 @@ class ModelLearner:
             self.policy_model.train()
 
             # get data
-            props = self.get_batch(train_episodes, batch_size, use_mask=use_mask)
-            state, actions, y = self.get_model_input_output(*props)
+            state, actions, y = self.get_model_input_output(*train_vars)
 
             # make predictions
-            yp, _ = self.run_model(state.to(self.device), actions.to(self.device))
+            yp, _ = self.run_model(state, actions)
 
             # gradient descent
             self.optimizer.zero_grad()
-            loss_vector = F.mse_loss(yp, y.to(self.device), reduction='none')
+            loss_vector = F.mse_loss(yp, y, reduction='none')
             loss = loss_vector.mean()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
@@ -236,10 +224,9 @@ class ModelLearner:
                 self.policy_model.eval()
 
                 with torch.no_grad():
-                    props = self.get_batch(test_episodes, batch_size, use_mask=use_mask)
-                    state, actions, y = self.get_model_input_output(*props)
-                    yp, _ = self.run_model(state.to(self.device), actions.to(self.device))
-                    loss_vector = F.mse_loss(yp, y.to(self.device), reduction='none')
+                    state, actions, y = self.get_model_input_output(*val_vars)
+                    yp, _ = self.run_model(state, actions)
+                    loss_vector = F.mse_loss(yp, y, reduction='none')
 
                     self.val_loss = loss_vector.mean()
                     self.val_r_loss = loss_vector[:, :, 0].mean()
@@ -258,22 +245,17 @@ class ModelLearner:
 
                 # self.logger.console_logger.info(f"Model training epoch {i}")
 
-    def train(self, buffer, t_env):
+    def train(self, batch, t_env):
 
-        # generate training and test episode indices
-        indices = list(range(0, buffer.episodes_in_buffer))
-        train_indices, test_indices = self.train_test_split(indices, test_ratio=self.args.model_test_ratio, shuffle=True)
+        # split in train and test sets
+        n_test = int(self.args.model_test_ratio * batch.batch_size)
+        vars = self.get_episode_vars(batch)
+        train_vars = [v[:n_test] for v in vars]
+        val_vars = [v[n_test:] for v in vars]
 
-        # extract episodes
-        train_episodes = [self.get_episode_vars(buffer[i]) for i in train_indices]
-        test_episodes = [self.get_episode_vars(buffer[i]) for i in train_indices]
-
-        self.train_models(train_episodes, test_episodes)
+        self.train_models(train_vars, val_vars)
 
     def generate_batch(self, batch, t_env):
-
-        print(f"Collecting {self.args.model_rollout_batch_size} episodes from MODEL ENV using epsilon: "
-              f"{self.model_mac.action_selector.epsilon:.2f}")
 
         batch_size = self.args.model_rollout_batch_size
 
@@ -358,6 +340,9 @@ class ModelLearner:
                 active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
                 if all(terminated):
                     break
+
+            print(f"Collected {self.args.model_rollout_batch_size} episodes from MODEL ENV using epsilon: "
+                  f"{self.model_mac.action_selector.epsilon:.3f}")
 
             return H, G
 

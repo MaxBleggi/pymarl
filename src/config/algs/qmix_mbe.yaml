@@ -49,7 +49,7 @@ model_mac: "model_mac"
 model_action_selector: "model_epsilon_greedy"
 model_epsilon_start: 1.0
 model_epsilon_finish: 0.5
-model_epsilon_anneal_time: 100000
+model_epsilon_anneal_time: 25000
 model_epsilon_delay: 0
 
 name: "qmix-mbe"
