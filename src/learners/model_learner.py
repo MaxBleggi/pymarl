@@ -113,20 +113,19 @@ class ModelLearner:
 
         # termination signal
         terminated = batch["terminated"][:, :-1].float()
-        term_idx = terminated.max(1)[1].max().item()
-        term_signal = torch.ones_like(terminated)
-        term_signal[:, :term_idx, :] = 0
+        term_idx = terminated.max(1)[1] # terminal timestep
+        term_signal = torch.ones_like(terminated) # mask timesteps including and after termination
+        mask = torch.zeros_like(terminated) # active timesteps (includes termination timestep)
+        for i in range(nbatch):
+            term_signal[i, :term_idx[i]] = 0
+            mask[i, :term_idx[i] + 1] = 1
 
         # generate current policy outputs
         policy = torch.zeros_like(action)
         with torch.no_grad():
             self.target_mac.init_hidden(nbatch)
-            for t in range(terminated.size()[1]):
+            for t in range(terminated.size()[1]): # max timesteps
                 policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
-
-        # mask for active timesteps (except for term_signal which is always valid)
-        mask = torch.ones_like(terminated)
-        mask[:, term_idx + 1:, :] = 0
 
         obs *= mask
         aa *= mask
@@ -238,10 +237,6 @@ class ModelLearner:
         # train models
         for e in range(self.args.model_epochs):
             batch = buffer.sample(self.args.batch_size)
-
-            # Truncate batch to only filled timesteps
-            max_ep_t = batch.max_t_filled()
-            episode_sample = batch[:, :max_ep_t]
 
             if batch.device != self.args.device:
                 batch.to(self.args.device)
