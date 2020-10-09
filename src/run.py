@@ -222,10 +222,13 @@ def run_sequential(args, logger):
                 learner.train(episode_sample, runner.t_env, episode)
                 #print(f"RL step: {time.time() - t_op_start: .2f} s")
 
-                t_op_start = time.time()
-                model_learner.train(episode_sample, runner.t_env)
-                H, G = model_learner.generate_batch(episode_sample, runner.t_env)
-                #print(f"Model step: {time.time() - t_op_start: .2f} s")
+            t_op_start = time.time()
+            model_learner.train(buffer)
+            # print(f"Model training step: {time.time() - t_op_start: .2f} s")
+
+            t_op_start = time.time()
+            H, G = model_learner.generate_batch(buffer, runner.t_env)
+            #print(f"Model episode generation step: {time.time() - t_op_start: .2f} s")
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)

@@ -175,103 +175,104 @@ class ModelLearner:
 
         return yp, (ht, ct)
 
-    def train_models(self, train_vars, val_vars):
-
-        #print(f"Training models ...")
-
-        # model learning parameters
-        log_epochs = self.args.model_log_epochs
-        use_mask = False # learning a termination signal is easier with unmasked input
-
-        train_loss = 0
-        val_loss = 0
-
-        for e in range(self.args.model_epochs):
-            t_start = time.time()
-
-            self.representation_model.train()
-            self.dynamics_model.train()
-            self.actions_model.train()
-            self.policy_model.train()
-
-            # get data
-            state, actions, y = self.get_model_input_output(*train_vars)
-
-
-
-            # make predictions
-            yp, _ = self.run_model(state, actions)
-
-            # gradient descent
-            self.optimizer.zero_grad()
-            loss_vector = F.mse_loss(yp, y, reduction='none')
-            loss = loss_vector.mean()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
-            self.optimizer.step()
-
-            # record losses
-            self.train_loss = loss.item()
-            self.train_r_loss = loss_vector[:, :, 0].mean()
-            self.train_T_loss = loss_vector[:, :, 1].mean()
-            self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
-            self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
-
-            if (e + 1) % log_epochs == 0:
-
-                self.representation_model.eval()
-                self.dynamics_model.eval()
-                self.actions_model.eval()
-                self.policy_model.eval()
-
-                with torch.no_grad():
-                    state, actions, y = self.get_model_input_output(*val_vars)
-                    yp, _ = self.run_model(state, actions)
-                    loss_vector = F.mse_loss(yp, y, reduction='none')
-
-                    self.val_loss = loss_vector.mean()
-                    self.val_r_loss = loss_vector[:, :, 0].mean()
-                    self.val_T_loss = loss_vector[:, :, 1].mean()
-                    self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
-                    self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
-
-                # report epoch losses
-                t_step = (time.time() - t_start)
-                print("Environment Model:")
-                print(f"epoch: {e + 1:<3}   train loss: {self.train_loss:.5f}, val loss: {self.val_loss:.5f} time: {t_step:.2f} s")
-                print(f" -- reward: train {self.train_r_loss:.5f} val {self.val_r_loss:.5f}")
-                print(f" -- term: train {self.train_T_loss:.5f} val {self.val_T_loss:.5f}")
-                print(f" -- avail_actions: train {self.train_aa_loss:.5f} val {self.val_aa_loss:.5f}")
-                print(f" -- policy: train {self.train_p_loss:.5f} val {self.val_p_loss:.5f}")
-
-                # self.logger.console_logger.info(f"Model training epoch {i}")
-
-    def train(self, batch, t_env):
-
-        # split in train and test sets
-        n_test = int(self.args.model_test_ratio * batch.batch_size)
-        vars = self.get_episode_vars(batch)
-        train_vars = [v[:n_test] for v in vars]
-        val_vars = [v[n_test:] for v in vars]
-
-        self.train_models(train_vars, val_vars)
-
-    def generate_batch(self, batch, t_env):
-
-        batch_size = self.args.model_rollout_batch_size
-
-        if batch.device != self.device:
-            batch.to(self.device)
-
-        # start with one episode as the seed since all episodes have the same starts
-        episode = batch[0]
+    def _validate(self, vars):
+        t_start = time.time()
 
         self.representation_model.eval()
         self.dynamics_model.eval()
         self.actions_model.eval()
+        self.policy_model.eval()
 
         with torch.no_grad():
-            # sample real starts from the replay buffer
+            state, actions, y = self.get_model_input_output(*vars)
+            yp, _ = self.run_model(state, actions)
+            loss_vector = F.mse_loss(yp, y, reduction='none')
+
+            self.val_loss = loss_vector.mean()
+            self.val_r_loss = loss_vector[:, :, 0].mean()
+            self.val_T_loss = loss_vector[:, :, 1].mean()
+            self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
+            self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
+
+        # report losses
+        t_step = (time.time() - t_start)
+        print("Environment Model:")
+        print(f"train loss: {self.train_loss:.5f}, val loss: {self.val_loss:.5f} time: {t_step:.2f} s")
+        print(f" -- reward: train {self.train_r_loss:.5f} val {self.val_r_loss:.5f}")
+        print(f" -- term: train {self.train_T_loss:.5f} val {self.val_T_loss:.5f}")
+        print(f" -- avail_actions: train {self.train_aa_loss:.5f} val {self.val_aa_loss:.5f}")
+        print(f" -- policy: train {self.train_p_loss:.5f} val {self.val_p_loss:.5f}")
+
+    def _train(self, vars):
+        # learning a termination signal is easier with unmasked input
+
+        self.representation_model.train()
+        self.dynamics_model.train()
+        self.actions_model.train()
+        self.policy_model.train()
+
+        # get data
+        state, actions, y = self.get_model_input_output(*vars)
+
+        # make predictions
+        yp, _ = self.run_model(state, actions)
+
+        # gradient descent
+        self.optimizer.zero_grad()
+        loss_vector = F.mse_loss(yp, y, reduction='none')
+        loss = loss_vector.mean()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
+        self.optimizer.step()
+
+        # record losses
+        self.train_loss = loss.item()
+        self.train_r_loss = loss_vector[:, :, 0].mean()
+        self.train_T_loss = loss_vector[:, :, 1].mean()
+        self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
+        self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
+
+    def train(self, buffer):
+
+        # train models
+        for e in range(self.args.model_epochs):
+            batch = buffer.sample(self.args.batch_size)
+
+            if batch.device != self.args.device:
+                batch.to(self.args.device)
+
+                vars = self.get_episode_vars(batch)
+                self._train(vars)
+
+        # validate models
+        batch = buffer.sample(self.args.batch_size)
+
+        if batch.device != self.args.device:
+            batch.to(self.args.device)
+
+            vars = self.get_episode_vars(batch)
+            self._validate(vars)
+
+
+    def generate_batch(self, buffer, t_env):
+
+        # sample starts from episode buffer
+        if not buffer.can_sample(1):
+            return
+
+        # start with one episode as the seed since all episodes have the same starts
+        episode = buffer.sample(1)
+        if episode.device != self.device:
+            episode.to(self.device)
+
+        batch_size = self.args.model_rollout_batch_size
+
+        self.representation_model.eval()
+        self.dynamics_model.eval()
+        self.actions_model.eval()
+        self.policy_model.eval()
+
+        with torch.no_grad():
 
             # get real starting states for the batch
             state = episode["state"][:, 0, :self.state_size]
@@ -288,7 +289,7 @@ class ModelLearner:
             terminated = (term_signal > 0)
             active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
 
-            max_t = batch.max_seq_length - 1
+            max_t = episode.max_seq_length - 1
 
             # initialise hidden states
             ht, ct = self.dynamics_model.init_hidden(batch_size, self.device) # dynamics model hidden state
@@ -345,7 +346,8 @@ class ModelLearner:
             print(f"Collected {self.args.model_rollout_batch_size} episodes from MODEL ENV using epsilon: "
                   f"{self.model_mac.action_selector.epsilon:.3f}")
 
-            f, bins = np.histogram(G.cpu(), bins=5)
+            # histogram plotting
+            f, bins = np.histogram(G.cpu())
             total = sum(f)
             for i, count in enumerate(f):
                 start = bins[i]
@@ -355,6 +357,7 @@ class ModelLearner:
                     p = 1
                 bar = "".join(["+"] * p)
                 print(f"{start:<5.1f}-{end:5.1f}  {count:<3} {bar}")
+            print()
 
             return H, G
 
@@ -383,5 +386,5 @@ class ModelLearner:
             self.logger.log_stat("model_available_actions_val_loss", self.val_aa_loss, t_env)
             self.logger.log_stat("model_policy_val_loss", self.val_p_loss, t_env)
 
-            self.logger.log_stat("model_epsilon", self.mac.action_selector.epsilon, t_env)
+            self.logger.log_stat("model_epsilon", self.model_mac.action_selector.epsilon, t_env)
             self.log_stats_t = t_env
