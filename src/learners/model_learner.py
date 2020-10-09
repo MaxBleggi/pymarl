@@ -113,20 +113,19 @@ class ModelLearner:
 
         # termination signal
         terminated = batch["terminated"][:, :-1].float()
-        term_idx = terminated.max(1)[1].max().item()
-        term_signal = torch.ones_like(terminated)
-        term_signal[:, :term_idx, :] = 0
+        term_idx = terminated.max(1)[1] # terminal timestep
+        term_signal = torch.ones_like(terminated) # mask timesteps including and after termination
+        mask = torch.zeros_like(terminated) # active timesteps (includes termination timestep)
+        for i in range(nbatch):
+            term_signal[i, :term_idx[i]] = 0
+            mask[i, :term_idx[i] + 1] = 1
 
         # generate current policy outputs
         policy = torch.zeros_like(action)
         with torch.no_grad():
             self.target_mac.init_hidden(nbatch)
-            for t in range(terminated.size()[1]):
+            for t in range(terminated.size()[1]): # max timesteps
                 policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
-
-        # mask for active timesteps (except for term_signal which is always valid)
-        mask = torch.ones_like(terminated)
-        mask[:, term_idx + 1:, :] = 0
 
         obs *= mask
         aa *= mask
@@ -197,6 +196,8 @@ class ModelLearner:
 
             # get data
             state, actions, y = self.get_model_input_output(*train_vars)
+
+
 
             # make predictions
             yp, _ = self.run_model(state, actions)
@@ -343,6 +344,17 @@ class ModelLearner:
 
             print(f"Collected {self.args.model_rollout_batch_size} episodes from MODEL ENV using epsilon: "
                   f"{self.model_mac.action_selector.epsilon:.3f}")
+
+            f, bins = np.histogram(G.cpu(), bins=5)
+            total = sum(f)
+            for i, count in enumerate(f):
+                start = bins[i]
+                end = bins[i + 1]
+                p = int(100 * count / total)
+                if p == 0 and count > 0:
+                    p = 1
+                bar = "".join(["+"] * p)
+                print(f"{start:<5.1f}-{end:5.1f}  {count:<3} {bar}")
 
             return H, G
 

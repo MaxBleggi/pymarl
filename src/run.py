@@ -225,8 +225,7 @@ def run_sequential(args, logger):
                 t_op_start = time.time()
                 model_learner.train(episode_sample, runner.t_env)
                 H, G = model_learner.generate_batch(episode_sample, runner.t_env)
-                print(np.histogram(G.cpu()))
-                print(f"Model step: {time.time() - t_op_start: .2f} s")
+                #print(f"Model step: {time.time() - t_op_start: .2f} s")
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
