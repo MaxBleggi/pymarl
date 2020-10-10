@@ -9,14 +9,10 @@ from modules.models.policy import PolicyModel
 
 import numpy as np
 import random
-from components.episode_buffer import EpisodeBatch
-from functools import partial
 from envs import REGISTRY as env_REGISTRY
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 import os
-from torch.distributions import Categorical
+import pickle
+from glob import glob
 from controllers import REGISTRY as mac_REGISTRY
 
 
@@ -74,6 +70,22 @@ class ModelLearner:
         self.train_p_loss, self.val_p_loss = 0, 0
 
         self.log_stats_t = -self.args.learner_log_interval - 1
+
+        self.epochs = 0
+        self.save_index = 0
+
+        # debugging
+        if self.args.model_save_val_data:
+            # setup dir and clear existing files
+            if self.args.episode_dir:
+                if os.path.exists(self.args.episode_dir):
+                    files = glob(os.path.join(self.args.episode_dir, "input_output_*.pkl"))
+                    for f in files:
+                        os.remove(f)
+                else:
+                    os.mkdir(self.args.episode_dir)
+            else:
+                raise Exception("Please specify 'episode_dir' or set 'save_episodes' to False")
 
     def train_test_split(self, indices, test_ratio=0.1, shuffle=True):
 
@@ -194,6 +206,22 @@ class ModelLearner:
             self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
             self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
 
+            if self.args.model_save_val_data:
+                # save input_outputs
+                if os.path.exists(self.args.episode_dir):
+                    fname = os.path.join(self.args.episode_dir, f"input_output_{self.save_index + 1:06}.pkl")
+                    with open(fname, 'wb') as f:
+                        save_data = {
+                            "n_agents": self.args.n_agents,
+                            "n_actions": self.args.n_actions,
+                            "y": y.cpu(),
+                            "yp": yp.cpu(),
+                            "val_loss": self.val_loss.item()
+                        }
+                        pickle.dump(save_data, f)
+                    self.save_index += 1
+
+
         # report losses
         t_step = (time.time() - t_start)
         print("Environment Model:")
@@ -214,45 +242,50 @@ class ModelLearner:
         # get data
         state, actions, y = self.get_model_input_output(*vars)
 
-        # make predictions
-        yp, _ = self.run_model(state, actions)
+        for e in range(self.args.model_epochs):
 
-        # gradient descent
-        self.optimizer.zero_grad()
-        loss_vector = F.mse_loss(yp, y, reduction='none')
-        loss = loss_vector.mean()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
-        self.optimizer.step()
+            # make predictions
+            yp, _ = self.run_model(state, actions)
 
-        # record losses
-        self.train_loss = loss.item()
-        self.train_r_loss = loss_vector[:, :, 0].mean()
-        self.train_T_loss = loss_vector[:, :, 1].mean()
-        self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
-        self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
+            # gradient descent
+            self.optimizer.zero_grad()
+            loss_vector = F.mse_loss(yp, y, reduction='none')
+            loss = loss_vector.mean()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
+            self.optimizer.step()
+
+            # record losses
+            self.train_loss = loss.item()
+            self.train_r_loss = loss_vector[:, :, 0].mean()
+            self.train_T_loss = loss_vector[:, :, 1].mean()
+            self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
+            self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
 
     def train(self, buffer):
 
         # train models
-        for e in range(self.args.model_epochs):
-            batch = buffer.sample(self.args.batch_size)
-
-            if batch.device != self.args.device:
-                batch.to(self.args.device)
-
-                vars = self.get_episode_vars(batch)
-                self._train(vars)
-
-        # validate models
-        batch = buffer.sample(self.args.batch_size)
+        batch = buffer.sample(self.args.model_batch_size)
 
         if batch.device != self.args.device:
             batch.to(self.args.device)
 
             vars = self.get_episode_vars(batch)
-            self._validate(vars)
+            self._train(vars)
 
+        self.epochs += 1
+
+        # validate periodically
+        if (self.epochs + 1) % self.args.model_log_epochs == 0:
+            # validate models
+            batch = buffer.sample(self.args.model_batch_size)
+
+            if batch.device != self.args.device:
+                batch.to(self.args.device)
+
+                vars = self.get_episode_vars(batch)
+                self._validate(vars)
+            self.epochs = 0
 
     def generate_batch(self, buffer, t_env):
 
@@ -317,10 +350,13 @@ class ModelLearner:
                 reward = rT[:, 0]
                 term_signal = rT[:, 1]
 
+                # clamp reward
+                reward[reward < 0] = 0
+
                 # add reward to episode returns
                 G[:, 0] += reward
                 # generate termination mask
-                threshold = 0.9
+                threshold = self.args.model_term_threshold
                 terminated = (term_signal > threshold)
 
                 # if this is the last timestep, terminate
@@ -329,7 +365,7 @@ class ModelLearner:
 
                 # generate and threshold avail_actions
                 avail_actions = self.actions_model(ht).view(batch_size, n_agents, n_actions)
-                threshold = 0.5
+                threshold = self.args.model_action_threshold
                 avail_actions = (avail_actions > threshold).int()
 
                 # handle cases where no agent actions are available e.g. when agent is dead
@@ -347,7 +383,7 @@ class ModelLearner:
                   f"{self.model_mac.action_selector.epsilon:.3f}")
 
             # histogram plotting
-            f, bins = np.histogram(G.cpu())
+            f, bins = np.histogram(G.cpu(), bins=5)
             total = sum(f)
             for i, count in enumerate(f):
                 start = bins[i]
