@@ -55,6 +55,7 @@ model_epsilon_anneal_time: 25000
 model_epsilon_delay: 0
 
 # debug
-model_save_val_data: False
+model_save_val_data: True
+#episode_dir: "/home/ubuntu/masters/experiments/model-learning/1/val_data"
 
 name: "qmix-mbe"
