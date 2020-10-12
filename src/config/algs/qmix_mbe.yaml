@@ -2,7 +2,6 @@
 # Uses a learned model to guide exploration
 #
 
-
 # use epsilon greedy action selector
 action_selector: "epsilon_greedy"
 epsilon_start: 1.0
@@ -26,6 +25,7 @@ hypernet_layers: 2
 hypernet_embed: 64
 
 # models
+runner: "model_episode"
 model_learner: "mbe"
 dynamics_model_hidden_dim: 256
 representation_model_hidden_dim: 256
@@ -35,7 +35,7 @@ policy_model_hidden_dim: 256
 # model learning params
 model_test_ratio: 0.1
 model_learning_rate: 0.01
-model_grad_clip_norm: 0.1
+model_grad_clip_norm: 0.01
 model_batch_size: 32
 model_epochs: 10 # per RL step
 model_log_epochs: 10
@@ -55,7 +55,6 @@ model_epsilon_anneal_time: 25000
 model_epsilon_delay: 0
 
 # debug
-model_save_val_data: True
-episode_dir: "/home/ubuntu/masters/experiments/model-learning/1/val_data"
+model_save_val_data: False
 
 name: "qmix-mbe"

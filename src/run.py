@@ -194,15 +194,29 @@ def run_sequential(args, logger):
     # timing operations
     t_op_start = 0
 
+    # model generated outputs
+    H, G = None, None
+    H_used = False
+
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
     while runner.t_env <= args.t_max:
 
         #print("Gathering real episode ...")
         t_op_start = time.time()
-        episode_batch = runner.run(test_mode=False)
+        # alternate between H and standard epsilon greedy
+        if H is not None and not H_used:
+            episode_batch = runner.run(H=H, test_mode=False)
+            H_used = True
+            print(
+                f"MODEL: reward: {episode_batch['reward'].sum().item():.3f} expected: {G:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+        else:
+            episode_batch = runner.run(H=None, test_mode=False)
+            H_used = False
+            print(
+                f"STANDARD: reward {episode_batch['reward'].sum().item():.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+
         buffer.insert_episode_batch(episode_batch)
-        print(
-            f"Real reward: {episode_batch['reward'].sum().item():.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+
 
         if buffer.can_sample(args.batch_size):
             for _ in range(args.batch_size_run):
@@ -229,6 +243,14 @@ def run_sequential(args, logger):
             t_op_start = time.time()
             H, G = model_learner.generate_batch(buffer, runner.t_env)
             #print(f"Model episode generation step: {time.time() - t_op_start: .2f} s")
+
+            # select model generated episode
+            G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]
+            G_ranked.sort(key=lambda x: x[1], reverse=True)
+            H_index = 0
+            H = H[G_ranked[H_index][0]]  # take the best candidate
+            G = G_ranked[H_index][1] # expected return for this candidate
+
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)

@@ -68,6 +68,7 @@ class ModelLearner:
         self.train_T_loss, self.val_T_loss = 0, 0
         self.train_aa_loss, self.val_aa_loss = 0, 0
         self.train_p_loss, self.val_p_loss = 0, 0
+        self.train_return_loss, self.val_return_loss = 0, 0
 
         self.log_stats_t = -self.args.learner_log_interval - 1
 
@@ -205,6 +206,7 @@ class ModelLearner:
             self.val_T_loss = loss_vector[:, :, 1].mean()
             self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
             self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
+            self.val_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
 
             if self.args.model_save_val_data:
                 # save input_outputs
@@ -230,6 +232,7 @@ class ModelLearner:
         print(f" -- term: train {self.train_T_loss:.5f} val {self.val_T_loss:.5f}")
         print(f" -- avail_actions: train {self.train_aa_loss:.5f} val {self.val_aa_loss:.5f}")
         print(f" -- policy: train {self.train_p_loss:.5f} val {self.val_p_loss:.5f}")
+        print(f" -- return: train {self.train_return_loss:.5f} val {self.val_return_loss:.5f}")
 
     def _train(self, vars):
         # learning a termination signal is easier with unmasked input
@@ -261,6 +264,7 @@ class ModelLearner:
             self.train_T_loss = loss_vector[:, :, 1].mean()
             self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
             self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
+            self.train_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
 
     def train(self, buffer):
 
@@ -331,7 +335,7 @@ class ModelLearner:
             G = torch.zeros(batch_size, 1).to(self.device)
 
             # action history
-            H = torch.zeros(batch_size, max_t, n_agents, n_actions).to(self.device)
+            H = torch.zeros(batch_size, max_t, n_agents).to(self.device)
 
             for t in range(0, max_t):
                 if t == 0:
@@ -343,7 +347,7 @@ class ModelLearner:
                 actions_onehot = F.one_hot(actions, num_classes=n_actions)
 
                 # update action history
-                H[:, t, ...] = actions_onehot
+                H[:, t, ...] = actions
 
                 # generate next state, reward, termination signal
                 rT, (ht, ct) = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
@@ -382,19 +386,21 @@ class ModelLearner:
             print(f"Collected {self.args.model_rollout_batch_size} episodes from MODEL ENV using epsilon: "
                   f"{self.model_mac.action_selector.epsilon:.3f}")
 
-            # histogram plotting
-            f, bins = np.histogram(G.cpu(), bins=5)
-            total = sum(f)
-            for i, count in enumerate(f):
-                start = bins[i]
-                end = bins[i + 1]
-                p = int(100 * count / total)
-                if p == 0 and count > 0:
-                    p = 1
-                bar = "".join(["+"] * p)
-                print(f"{start:<5.1f}-{end:5.1f}  {count:<3} {bar}")
-            print()
-
+            # # histogram plotting
+            # f, bins = np.histogram(G.cpu(), bins=5)
+            # total = sum(f)
+            # for i, count in enumerate(f):
+            #     start = bins[i]
+            #     end = bins[i + 1]
+            #     p = int(100 * count / total)
+            #     if p == 0 and count > 0:
+            #         p = 1
+            #     bar = "".join(["+"] * p)
+            #     print(f"{start:<5.1f}-{end:5.1f}  {count:<3} {bar}")
+            # print()
+            G_cpu = G.cpu()
+            print(f"RETURNS: mean: {G_cpu.mean():.2f} std: {G_cpu.std():.2f} max: {G_cpu.max():.2f} min: {G_cpu.min():.2f}")
+            print(f" -- losses: train {self.train_return_loss:.5f} val {self.val_return_loss:.5f}")
             return H, G
 
     def cuda(self):
