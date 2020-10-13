@@ -1,5 +1,5 @@
-# --- QMIX-MBE specific parameters ---
-# Uses a learned model to guide exploration
+# --- QMIX-MCTS specific parameters ---
+# Uses a learned model to guide exploration via monte carlo tree search
 #
 
 # use epsilon greedy action selector
@@ -23,8 +23,8 @@ hypernet_layers: 2
 hypernet_embed: 64
 
 # models
-runner: "model_episode"
-model_learner: "mbe"
+runner: "model_mcts_episode"
+model_learner: "model_mcts"
 dynamics_model_hidden_dim: 256
 representation_model_hidden_dim: 256
 actions_model_hidden_dim: 256
@@ -53,7 +53,7 @@ model_epsilon_anneal_time: 25000
 model_epsilon_delay: 0
 
 # debug
-model_save_val_data: True
+model_save_val_data: False
 #episode_dir: "/home/ubuntu/masters/experiments/model-learning/1/val_data"
 
-name: "qmix-mbe"
+name: "qmix-mcts"

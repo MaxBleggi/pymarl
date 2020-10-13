@@ -3,6 +3,7 @@ from .coma_learner import COMALearner
 from .qtran_learner import QLearner as QTranLearner
 from .simple_learner import SimPLeLearner
 from .model_learner import ModelLearner
+from .model_mcts_learner import ModelMCTSLearner
 
 REGISTRY = {}
 
@@ -11,3 +12,4 @@ REGISTRY["coma_learner"] = COMALearner
 REGISTRY["qtran_learner"] = QTranLearner
 REGISTRY["simple_learner"] = SimPLeLearner
 REGISTRY["mbe"] = ModelLearner
+REGISTRY["model_mcts"] = ModelMCTSLearner
