@@ -2,6 +2,7 @@ from envs import REGISTRY as env_REGISTRY
 from functools import partial
 from components.episode_buffer import EpisodeBatch
 import numpy as np
+import torch
 
 class ModelMCTSEpisodeRunner:
 
@@ -25,10 +26,11 @@ class ModelMCTSEpisodeRunner:
         # Log the first run
         self.log_train_stats_t = -1000000
 
-    def setup(self, scheme, groups, preprocess, mac):
+    def setup(self, scheme, groups, preprocess, mac, model=None):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
                                  preprocess=preprocess, device=self.args.device)
         self.mac = mac
+        self.model = model
 
     def get_env_info(self):
         return self.env.get_env_info()
@@ -44,18 +46,22 @@ class ModelMCTSEpisodeRunner:
         self.env.reset()
         self.t = 0
 
-    def run(self, H=None, test_mode=False):
+    def run(self, tree=None, test_mode=False):
         self.reset()
 
         terminated = False
         episode_return = 0
+        expected_mcts_return, mcts_return = 0, 0
+        mcts_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
 
+        node = tree if tree is not None else None
         while not terminated:
 
+            avail_actions = self.env.get_avail_actions()
             pre_transition_data = {
                 "state": [self.env.get_state()],
-                "avail_actions": [self.env.get_avail_actions()],
+                "avail_actions": [avail_actions],
                 "obs": [self.env.get_obs()]
             }
 
@@ -63,21 +69,29 @@ class ModelMCTSEpisodeRunner:
 
             # Pass the entire batch of experiences up till now to the agents
             # Receive the actions for each agent at this timestep in a batch of size 1
-            actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
-            if H is not None:
-                try:
-                    H_actions = H[self.t]
-                    reward, terminated, env_info = self.env.step(H_actions)
-                    actions = H_actions.unsqueeze(0)
-                except:
-                    # fallback to policy
-                    #H = None
-                    #print(f"Model actions failed at {self.t}")
-                    reward, terminated, env_info = self.env.step(actions[0])
+
+            if node:
+                avail_actions = torch.tensor(avail_actions, dtype=torch.int32)
+                options = torch.tensor([self.model.hash_to_list(x) for x in list(node.children.keys())], dtype=torch.int64)
+                valid = [o.tolist() for o in options if torch.all(avail_actions.gather(1, o.unsqueeze(1)).bool())]
+                if len(valid) == 0:
+                    print("no valid options found at timestep:", self.t, "reverting to policy")
+                    node = None
+                    actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
+                else:
+                    ranked = sorted([([o], node.children[self.model.list_to_hash(o)]) for o in valid], key=lambda x: x[1].value, reverse=True)
+                    actions, node = ranked[0] # select best
+                    print("selected: ", node)
+                    mcts_return += node.value
+                    
             else:
-                reward, terminated, env_info = self.env.step(actions[0])
+                actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
+
+            reward, terminated, env_info = self.env.step(actions[0])
 
             episode_return += reward
+            if node:
+                expected_mcts_return += reward
 
             post_transition_data = {
                 "actions": actions,
@@ -122,7 +136,7 @@ class ModelMCTSEpisodeRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        return self.batch
+        return self.batch, episode_return, expected_mcts_return, mcts_return
 
     def _log(self, returns, stats, prefix):
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)

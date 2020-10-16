@@ -13,8 +13,49 @@ from envs import REGISTRY as env_REGISTRY
 import os
 import pickle
 from glob import glob
+import queue
 from controllers import REGISTRY as mac_REGISTRY
 
+
+class Node():
+
+    def __init__(self, name, reward=0., parent=None, depth=0):
+
+        self.name = name
+        self.reward = reward
+        self.parent = parent
+        self.depth = depth
+
+        self.children = {}
+        self.is_root = parent is None
+        self.visits = 1
+        self.value = 0
+        self.touched = False
+
+    def add(self, name, reward=0.):
+        self.visits += 1
+        if name not in self.children:
+            node = Node(name, reward=reward, parent=self, depth=self.depth + 1)
+            self.children[name] = node
+        else:
+            self.children[name].visits += 1
+            self.children[name].reward += reward
+
+        return self.children[name]
+
+    def __repr__(self):
+        return f"name: {self.name} is_root: {self.is_root} parent: {self.parent.name if self.parent else None} children: {list(self.children.keys())} visits: {self.visits} reward: {self.reward:.2f} value: {self.value:.2f} depth: {self.depth}"
+
+    def __str__(self):
+        return self.__repr__()
+
+
+def list_to_hash(l):
+    return "-".join([str(x) for x in l])
+
+
+def hash_to_list(h):
+    return [int(x) for x in h.split('-')]
 
 class ModelMCTSLearner:
     def __init__(self, mac, scheme, groups, logger, args):
@@ -75,7 +116,7 @@ class ModelMCTSLearner:
         self.epochs = 0
         self.save_index = 0
 
-        self.random_starts = True
+        self.random_starts = self.args.model_random_starts
 
         # debugging
         if self.args.model_save_val_data:
@@ -194,7 +235,7 @@ class ModelMCTSLearner:
         self.policy_model.eval()
 
         with torch.no_grad():
-            state, actions, y = self.get_model_input_output(*vars)
+            state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts)
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
@@ -295,16 +336,77 @@ class ModelMCTSLearner:
                 self._validate(vars)
             self.epochs = 0
 
-    def generate_batch(self, buffer, t_env):
+    def list_to_hash(self, l):
+        return "-".join([str(x) for x in l])
 
-        # sample starts from episode buffer
-        if not buffer.can_sample(1):
-            return
+    def hash_to_list(self, h):
+        return [int(x) for x in h.split('-')]
 
-        # start with one episode as the seed since all episodes have the same starts
-        episode = buffer.sample(1)
-        if episode.device != self.device:
-            episode.to(self.device)
+    def build_tree(self, batch, t_env):
+
+        # generate action history reward and valid timestep mask across batch
+        actions, reward, mask, last_t = self.generate_batch(batch, t_env)
+        nb, nt, _ = reward.size()
+
+        # build tree
+        r_total = 0
+        tree = Node('root')
+        for b in range(nb):
+            node = tree
+            for t in range(nt):
+                if mask[b, t].bool().item():
+                    name = list_to_hash(actions[b, t].tolist())
+                    r = reward[b, t].item()
+                    node = node.add(name, reward=r)
+                    r_total += r
+                else:
+                    break
+
+        # find leaf nodes
+        q = queue.Queue()
+        q.put(tree)
+        leaves = []
+        while not q.empty():
+            n = q.get()
+            if len(n.children) == 0:
+                leaves.append(n)
+            else:
+                for k, v in n.children.items():
+                    q.put(v)
+
+        # backup from leaf nodes
+        for l in leaves:
+            q.put(l)
+        while not q.empty():
+            n = q.get()
+            if not n.is_root and not n.touched:
+                if len(n.children) > 0:
+                    if all([v.touched for k, v in n.children.items()]):
+                        n.parent.reward += n.reward
+                        n.touched = True
+                        q.put(n.parent)
+                else:
+                    n.parent.reward += n.reward
+                    n.touched = True
+                    q.put(n.parent)
+
+        # traverse tree and normalise rewards by visit count
+        q.put(tree)
+        while not q.empty():
+            n = q.get()
+            n.value = n.reward / n.visits
+            for c in list(n.children.values()):
+                q.put(c)
+
+        #print(f"leaves: {len(leaves)}")
+        #print(f"total reward: {r_total:.2f}, backed up: {tree.reward:.2f}")
+
+        return tree
+
+    def generate_batch(self, batch, t_env):
+
+        if batch.device != self.device:
+            batch.to(self.device)
 
         batch_size = self.args.model_rollout_batch_size
 
@@ -316,10 +418,10 @@ class ModelMCTSLearner:
         with torch.no_grad():
 
             # get real starting states for the batch
-            state = episode["state"][:, 0, :self.state_size]
-            avail_actions = episode["avail_actions"][:, 0]
+            state = batch["state"][:, 0, :self.state_size]
+            avail_actions = batch["avail_actions"][:, 0]
             _, n_agents, n_actions = avail_actions.size()
-            term_signal = episode["terminated"][:, 0].float()
+            term_signal = batch["terminated"][:, 0].float()
 
             # expand starting states into batch size
             state = state.repeat(batch_size, 1)
@@ -330,16 +432,22 @@ class ModelMCTSLearner:
             terminated = (term_signal > 0)
             active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
 
-            max_t = episode.max_seq_length - 1
+            max_t = batch.max_seq_length - 1
 
             # initialise hidden states
             ht, ct = self.dynamics_model.init_hidden(batch_size, self.device) # dynamics model hidden state
 
-            # reward distribution
-            G = torch.zeros(batch_size, 1).to(self.device)
+            # reward history
+            R = torch.zeros(batch_size, max_t, 1).to(self.device)
 
             # action history
-            H = torch.zeros(batch_size, max_t, n_agents).to(self.device)
+            H = torch.zeros(batch_size, max_t, n_agents, dtype=torch.int).to(self.device)
+
+            # active episode mask
+            M = torch.zeros(batch_size, max_t, 1, dtype=torch.bool).to(self.device)
+
+            # keep track of last timestep
+            last_t = torch.zeros(batch_size).int()
 
             for t in range(0, max_t):
                 if t == 0:
@@ -361,11 +469,18 @@ class ModelMCTSLearner:
                 # clamp reward
                 reward[reward < 0] = 0
 
-                # add reward to episode returns
-                G[:, 0] += reward
+                # record timestep reward
+                R[:, t, :] = reward.unsqueeze(dim=-1)
+
                 # generate termination mask
                 threshold = self.args.model_term_threshold
                 terminated = (term_signal > threshold)
+
+                # mask active episodes
+                M[active_episodes, t] = True
+
+                # incrementent max timestep
+                last_t[active_episodes] = t
 
                 # if this is the last timestep, terminate
                 if t == max_t - 1:
@@ -383,29 +498,11 @@ class ModelMCTSLearner:
                 avail_actions[mask] = source[mask]
 
                 # update active episodes
-                active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
+                active_episodes = [i for i, finished in enumerate(terminated[active_episodes].flatten()) if not finished]
                 if all(terminated):
                     break
 
-            print(f"Collected {self.args.model_rollout_batch_size} episodes from MODEL ENV using epsilon: "
-                  f"{self.model_mac.action_selector.epsilon:.3f}")
-
-            # # histogram plotting
-            # f, bins = np.histogram(G.cpu(), bins=5)
-            # total = sum(f)
-            # for i, count in enumerate(f):
-            #     start = bins[i]
-            #     end = bins[i + 1]
-            #     p = int(100 * count / total)
-            #     if p == 0 and count > 0:
-            #         p = 1
-            #     bar = "".join(["+"] * p)
-            #     print(f"{start:<5.1f}-{end:5.1f}  {count:<3} {bar}")
-            # print()
-            G_cpu = G.cpu()
-            print(f"RETURNS: mean: {G_cpu.mean():.2f} std: {G_cpu.std():.2f} max: {G_cpu.max():.2f} min: {G_cpu.min():.2f}")
-            print(f" -- losses: train {self.train_return_loss:.5f} val {self.val_return_loss:.5f}")
-            return H, G
+            return H, R, M, last_t
 
     def cuda(self):
         if self.dynamics_model:

@@ -37,6 +37,7 @@ model_grad_clip_norm: 0.01
 model_batch_size: 32
 model_epochs: 10 # per RL step
 model_log_epochs: 10
+model_random_starts: False
 
 # rollouts
 model_rollouts: 256

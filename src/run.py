@@ -115,17 +115,17 @@ def run_sequential(args, logger):
     # Setup multiagent controller here
     mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
 
-    # Give runner the scheme
-    runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
-
     # Learners
     learner = le_REGISTRY[args.learner](mac, buffer.scheme, logger, args)
-    model_learner = le_REGISTRY[args.model_learner](mac, buffer.scheme, groups, logger, args) if args.model_learner else None
+    model = le_REGISTRY[args.model_learner](mac, buffer.scheme, groups, logger, args) if args.model_learner else None
+
+    # Give runner the scheme
+    runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac, model=model)
 
     if args.use_cuda:
         learner.cuda()
-        if model_learner:
-            model_learner.cuda()
+        if model:
+            model.cuda()
 
     if args.checkpoint_path != "":
         if not os.path.isdir(args.checkpoint_path):
@@ -194,9 +194,10 @@ def run_sequential(args, logger):
     # timing operations
     t_op_start = 0
 
-    # model generated outputs
-    H, G = None, None
-    H_used = False
+    # model based vars
+    mcts_used = False
+    model_trained = False
+    tree = None
 
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
     while runner.t_env <= args.t_max:
@@ -204,16 +205,16 @@ def run_sequential(args, logger):
         #print("Gathering real episode ...")
         t_op_start = time.time()
         # alternate between H and standard epsilon greedy
-        if H is not None and not H_used:
-            episode_batch = runner.run(H=H, test_mode=False)
-            H_used = True
+        if model_trained and not mcts_used:
+            episode_batch, episode_return, expected_mcts_return, mcts_return = runner.run(tree=tree, test_mode=False)
+            mcts_used = True
             print(
-                f"MODEL: reward: {episode_batch['reward'].sum().item():.3f} expected: {G:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"MCTS: reward {episode_return:.3f} mcts_return: {mcts_return:.3f} expected: {expected_mcts_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
-            episode_batch = runner.run(H=None, test_mode=False)
-            H_used = False
+            episode_batch, episode_return, _, _ = runner.run(tree=None, test_mode=False)
+            mcts_used = False
             print(
-                f"STANDARD: reward {episode_batch['reward'].sum().item():.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"STANDARD: reward {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
         buffer.insert_episode_batch(episode_batch)
 
@@ -234,23 +235,19 @@ def run_sequential(args, logger):
 
                 t_op_start = time.time()
                 learner.train(episode_sample, runner.t_env, episode)
-                #print(f"RL step: {time.time() - t_op_start: .2f} s")
+                print(f"RL step: {time.time() - t_op_start: .2f} s")
 
+            # train environment model
             t_op_start = time.time()
-            model_learner.train(buffer)
-            # print(f"Model training step: {time.time() - t_op_start: .2f} s")
+            model.train(buffer)
+            if not model_trained:
+                model_trained = True
+            print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
+            # build search tree
             t_op_start = time.time()
-            H, G = model_learner.generate_batch(buffer, runner.t_env)
-            #print(f"Model episode generation step: {time.time() - t_op_start: .2f} s")
-
-            # select model generated episode
-            G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]
-            G_ranked.sort(key=lambda x: x[1], reverse=True)
-            H_index = 0
-            H = H[G_ranked[H_index][0]]  # take the best candidate
-            G = G_ranked[H_index][1] # expected return for this candidate
-
+            tree = model.build_tree(buffer.sample(1), runner.t_env)
+            print(f"Building search tree: {time.time() - t_op_start: .2f} s")
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
