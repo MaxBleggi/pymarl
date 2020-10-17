@@ -28,24 +28,26 @@ class Node():
 
         self.children = {}
         self.is_root = parent is None
-        self.visits = 1
+        self.visits = 0
         self.return_ = self.reward
         self.expected_return = 0
         self.expected_reward = self.reward
         self.touched = False
 
     def add(self, name, reward=0.):
-        self.visits += 1
         if name not in self.children:
             node = Node(name, reward=reward, parent=self, depth=self.depth + 1)
             self.children[name] = node
         else:
-            self.children[name].visits += 1
             self.children[name].reward += reward
             self.children[name].return_ += reward
-            self.expected_reward = self.reward / self.visits
 
         return self.children[name]
+
+    def visit(self):
+        self.visits += 1
+        self.expected_reward = self.reward / self.visits
+        return self
 
     def __repr__(self):
         return f"name: {self.name} is_root: {self.is_root} parent: {self.parent.name if self.parent else None} children: {list(self.children.keys())} visits: {self.visits} reward: {self.reward:.2f} expected_reward: {self.expected_reward:.2f} return: {self.return_:.2f} expected_return: {self.expected_return:.2f} depth: {self.depth}"
@@ -356,12 +358,12 @@ class ModelMCTSLearner:
         r_total = 0
         tree = Node('root')
         for b in range(nb):
-            node = tree
+            node = tree.visit()
             for t in range(nt):
                 if mask[b, t].bool().item():
                     name = list_to_hash(actions[b, t].tolist())
                     r = reward[b, t].item()
-                    node = node.add(name, reward=r)
+                    node = node.add(name, reward=r).visit()
                     r_total += r
                 else:
                     break
