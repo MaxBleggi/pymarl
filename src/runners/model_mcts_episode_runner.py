@@ -79,10 +79,10 @@ class ModelMCTSEpisodeRunner:
                     node = None
                     actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                 else:
-                    ranked = sorted([([o], node.children[self.model.list_to_hash(o)]) for o in valid], key=lambda x: x[1].value, reverse=True)
+                    ranked = sorted([([o], node.children[self.model.list_to_hash(o)]) for o in valid], key=lambda x: x[1].expected_return, reverse=True)
                     actions, node = ranked[0] # select best
                     print("selected: ", node)
-                    mcts_return += node.value
+                    expected_mcts_return += node.expected_reward
                     
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
@@ -91,7 +91,7 @@ class ModelMCTSEpisodeRunner:
 
             episode_return += reward
             if node:
-                expected_mcts_return += reward
+                mcts_return += reward
 
             post_transition_data = {
                 "actions": actions,
@@ -136,7 +136,7 @@ class ModelMCTSEpisodeRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        return self.batch, episode_return, expected_mcts_return, mcts_return
+        return self.batch, episode_return, mcts_return, expected_mcts_return
 
     def _log(self, returns, stats, prefix):
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)

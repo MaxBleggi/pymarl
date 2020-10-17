@@ -29,7 +29,9 @@ class Node():
         self.children = {}
         self.is_root = parent is None
         self.visits = 1
-        self.value = 0
+        self.return_ = self.reward
+        self.expected_return = 0
+        self.expected_reward = self.reward
         self.touched = False
 
     def add(self, name, reward=0.):
@@ -40,11 +42,13 @@ class Node():
         else:
             self.children[name].visits += 1
             self.children[name].reward += reward
+            self.children[name].return_ += reward
+            self.expected_reward = self.reward / self.visits
 
         return self.children[name]
 
     def __repr__(self):
-        return f"name: {self.name} is_root: {self.is_root} parent: {self.parent.name if self.parent else None} children: {list(self.children.keys())} visits: {self.visits} reward: {self.reward:.2f} value: {self.value:.2f} depth: {self.depth}"
+        return f"name: {self.name} is_root: {self.is_root} parent: {self.parent.name if self.parent else None} children: {list(self.children.keys())} visits: {self.visits} reward: {self.reward:.2f} expected_reward: {self.expected_reward:.2f} return: {self.return_:.2f} expected_return: {self.expected_return:.2f} depth: {self.depth}"
 
     def __str__(self):
         return self.__repr__()
@@ -382,24 +386,24 @@ class ModelMCTSLearner:
             if not n.is_root and not n.touched:
                 if len(n.children) > 0:
                     if all([v.touched for k, v in n.children.items()]):
-                        n.parent.reward += n.reward
+                        n.parent.return_ += n.return_
                         n.touched = True
                         q.put(n.parent)
                 else:
-                    n.parent.reward += n.reward
+                    n.parent.return_ += n.return_
                     n.touched = True
                     q.put(n.parent)
 
-        # traverse tree and normalise rewards by visit count
+        # traverse tree and normalise returns by visit count
         q.put(tree)
         while not q.empty():
             n = q.get()
-            n.value = n.reward / n.visits
+            n.expected_return = n.return_ / n.visits
             for c in list(n.children.values()):
                 q.put(c)
 
-        #print(f"leaves: {len(leaves)}")
-        #print(f"total reward: {r_total:.2f}, backed up: {tree.reward:.2f}")
+        print(f"leaves: {len(leaves)}")
+        print(f"total reward: {r_total:.2f}, backed up: {tree.return_:.2f}")
 
         return tree
 

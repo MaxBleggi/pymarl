@@ -206,15 +206,15 @@ def run_sequential(args, logger):
         t_op_start = time.time()
         # alternate between H and standard epsilon greedy
         if model_trained and not mcts_used:
-            episode_batch, episode_return, expected_mcts_return, mcts_return = runner.run(tree=tree, test_mode=False)
+            episode_batch, episode_return, mcts_return, expected_mcts_return = runner.run(tree=tree, test_mode=False)
             mcts_used = True
             print(
-                f"MCTS: reward {episode_return:.3f} mcts_return: {mcts_return:.3f} expected: {expected_mcts_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"MCTS: return {episode_return:.3f} mcts_return: {mcts_return:.3f} expected_mcts_return: {expected_mcts_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
             episode_batch, episode_return, _, _ = runner.run(tree=None, test_mode=False)
             mcts_used = False
             print(
-                f"STANDARD: reward {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
         buffer.insert_episode_batch(episode_batch)
 
@@ -245,9 +245,10 @@ def run_sequential(args, logger):
             print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
             # build search tree
-            t_op_start = time.time()
-            tree = model.build_tree(buffer.sample(1), runner.t_env)
-            print(f"Building search tree: {time.time() - t_op_start: .2f} s")
+            if model_trained and not mcts_used:
+                t_op_start = time.time()
+                tree = model.build_tree(buffer.sample(1), runner.t_env)
+                print(f"Building search tree: {time.time() - t_op_start: .2f} s")
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
