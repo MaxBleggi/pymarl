@@ -196,22 +196,19 @@ def run_sequential(args, logger):
 
     # model generated outputs
     H, G = None, None
-    H_used = False
 
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
     while runner.t_env <= args.t_max:
 
         #print("Gathering real episode ...")
         t_op_start = time.time()
-        # alternate between H and standard epsilon greedy
-        if H is not None and not H_used:
+
+        if H is not None:
             episode_batch = runner.run(H=H, test_mode=False)
-            H_used = True
             print(
                 f"MODEL: reward: {episode_batch['reward'].sum().item():.3f} expected: {G:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
             episode_batch = runner.run(H=None, test_mode=False)
-            H_used = False
             print(
                 f"STANDARD: reward {episode_batch['reward'].sum().item():.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
