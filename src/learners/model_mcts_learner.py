@@ -287,7 +287,7 @@ class ModelMCTSLearner:
         self.policy_model.train()
 
         for e in range(self.args.model_epochs):
-
+            print(f"model training step {e}")
             # get data
             state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts)
 

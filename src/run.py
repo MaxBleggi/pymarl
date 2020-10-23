@@ -218,7 +218,6 @@ def run_sequential(args, logger):
 
         buffer.insert_episode_batch(episode_batch)
 
-
         if buffer.can_sample(args.batch_size):
             for _ in range(args.batch_size_run):
                 t_op_start = time.time()
