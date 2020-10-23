@@ -287,7 +287,6 @@ class ModelMCTSLearner:
         self.policy_model.train()
 
         for e in range(self.args.model_epochs):
-            print(f"model training step {e}")
             # get data
             state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts)
 
@@ -322,8 +321,8 @@ class ModelMCTSLearner:
         if batch.device != self.args.device:
             batch.to(self.args.device)
 
-            vars = self.get_episode_vars(batch)
-            self._train(vars)
+        vars = self.get_episode_vars(batch)
+        self._train(vars)
 
         self.epochs += 1
 
@@ -335,11 +334,12 @@ class ModelMCTSLearner:
             if batch.device != self.args.device:
                 batch.to(self.args.device)
 
-                max_ep_t = batch.max_t_filled()
-                batch = batch[:, :max_ep_t]
+            max_ep_t = batch.max_t_filled()
+            batch = batch[:, :max_ep_t]
 
-                vars = self.get_episode_vars(batch)
-                self._validate(vars)
+            vars = self.get_episode_vars(batch)
+            self._validate(vars)
+
             self.epochs = 0
 
     def list_to_hash(self, l):
