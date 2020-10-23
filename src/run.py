@@ -205,7 +205,7 @@ def run_sequential(args, logger):
         #print("Gathering real episode ...")
         t_op_start = time.time()
         # alternate between H and standard epsilon greedy
-        if model_trained and not mcts_used:
+        if model_trained:
             episode_batch, episode_return, mcts_return, expected_mcts_return = runner.run(tree=tree, test_mode=False)
             mcts_used = True
             print(
@@ -245,7 +245,7 @@ def run_sequential(args, logger):
             print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
             # build search tree
-            if model_trained and not mcts_used:
+            if model_trained:
                 t_op_start = time.time()
                 tree = model.build_tree(buffer.sample(1), runner.t_env)
                 print(f"Building search tree: {time.time() - t_op_start: .2f} s")
