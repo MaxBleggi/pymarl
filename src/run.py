@@ -276,17 +276,6 @@ def run_sequential(args, logger):
             # use appropriate filenames to do critics, optimizer states
             learner.save_models(save_path)
 
-        if args.save_model:
-
-            save_path = os.path.join(args.local_results_path, "models", args.unique_token)
-            # "results/models/{}".format(unique_token)
-            os.makedirs(save_path, exist_ok=True)
-            logger.console_logger.info("Saving models to {}".format(save_path))
-
-            # learner should handle saving/loading -- delegate actor save/load to mac,
-            # use appropriate filenames to do critics, optimizer states
-            learner.save_models(save_path)
-
         episode += args.batch_size_run
 
         if (runner.t_env - last_log_T) >= args.log_interval:
