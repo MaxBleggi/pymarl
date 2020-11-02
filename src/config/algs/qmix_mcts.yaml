@@ -37,10 +37,10 @@ model_grad_clip_norm: 0.01
 model_batch_size: 32
 model_epochs: 10 # per RL step
 model_log_epochs: 10
-model_random_starts: False
+model_random_starts: True
 
 # rollouts
-#model_rollouts: 1024 # not currently used
+model_rollout_timesteps:  # default to max scenario timesteps
 model_rollout_batch_size: 256
 model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold

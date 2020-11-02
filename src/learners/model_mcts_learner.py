@@ -438,7 +438,10 @@ class ModelMCTSLearner:
             terminated = (term_signal > 0)
             active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
 
+            # set the number of rollout timesteps
+            k = self.args.model_rollout_timesteps
             max_t = batch.max_seq_length - 1
+            max_t = min(k, max_t) if k else max_t
 
             # initialise hidden states
             ht, ct = self.dynamics_model.init_hidden(batch_size, self.device) # dynamics model hidden state
