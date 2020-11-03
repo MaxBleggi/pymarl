@@ -356,13 +356,18 @@ class ModelMCTSLearner:
     def build_tree(self, batch, t_env, t_start=0):
 
         # generate action history reward and valid timestep mask across batch
+        t_op_start = time.time()
         q_values, actions, reward, mask = self.generate_batch(batch, t_env, t_start)
+        #print(f"Generated trajectories: {time.time() - t_op_start: .3f} s")
+
         nb, nt, _ = reward.size()
         k = self.args.model_rollout_timesteps
 
+        t_op_start = time.time()
         # build tree
         r_total = 0
         tree = Node('root')
+
         for b in range(nb):
             node = tree.visit()
             for t in range(nt):
@@ -377,7 +382,10 @@ class ModelMCTSLearner:
                 else:
                     # terminated trajectory
                     break
+        #print(f"Building tree: {time.time() - t_op_start: .3f} s")
 
+
+        t_op_start = time.time()
         # find leaf nodes
         q = queue.Queue()
         q.put(tree, False)
@@ -389,7 +397,9 @@ class ModelMCTSLearner:
             else:
                 for k, v in n.children.items():
                     q.put(v, False)
+        #print(f"Find leaf nodes: {time.time() - t_op_start: .3f} s")
 
+        t_op_start = time.time()
         # backup from leaf nodes
         for l in leaves:
             q.put(l, False)
@@ -405,7 +415,9 @@ class ModelMCTSLearner:
                     n.parent.return_ += n.return_
                     n.touched = True
                     q.put(n.parent, False)
+        #print(f"Backing up values: {time.time() - t_op_start: .3f} s")
 
+        t_op_start = time.time()
         # traverse tree and normalise returns by visit count
         q.put(tree, False)
         while not q.empty():
@@ -413,6 +425,7 @@ class ModelMCTSLearner:
             n.expected_return = n.return_ / n.visits
             for c in list(n.children.values()):
                 q.put(c, False)
+        #print(f"Normalising values: {time.time() - t_op_start: .3f} s")
 
         #print(f"leaves: {len(leaves)}")
         #print(f"total reward: {r_total:.2f}, backed up: {tree.return_:.2f}")
