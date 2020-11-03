@@ -233,12 +233,14 @@ def run_sequential(args, logger):
                 learner.train(episode_sample, runner.t_env, episode)
                 print(f"RL step: {time.time() - t_op_start: .2f} s")
 
-            # train environment model
-            t_op_start = time.time()
-            model.train(buffer)
-            if not model_trained:
-                model_trained = True
-            print(f"Model training step: {time.time() - t_op_start: .2f} s")
+
+            if buffer.can_sample(args.model_min_samples):
+                # train environment model
+                t_op_start = time.time()
+                model.train(buffer)
+                if not model_trained:
+                    model_trained = True
+                print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
 
         # Execute test runs once in a while

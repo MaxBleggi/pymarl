@@ -31,6 +31,7 @@ actions_model_hidden_dim: 256
 policy_model_hidden_dim: 256
 
 # model learning params
+model_min_samples: 128
 model_test_ratio: 0.1
 model_learning_rate: 0.01
 model_grad_clip_norm: 0.01
@@ -50,7 +51,7 @@ model_action_threshold: 0.5 # # masks available action outputs at this threshold
 model_mac: "model_mac"
 model_action_selector: "model_epsilon_greedy"
 model_epsilon_start: 1.0
-model_epsilon_finish: 0.5
+model_epsilon_finish: 0.05
 model_epsilon_anneal_time: 25000
 model_epsilon_delay: 0
 

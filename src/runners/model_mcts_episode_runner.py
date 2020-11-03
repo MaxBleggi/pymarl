@@ -56,6 +56,9 @@ class ModelMCTSEpisodeRunner:
         mcts_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
 
+        if use_tree:
+            print(f"Generating trajectories with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
+
         while not terminated:
 
             avail_actions = self.env.get_avail_actions()
