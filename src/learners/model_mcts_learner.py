@@ -186,7 +186,7 @@ class ModelMCTSLearner:
 
         return state, action, reward, term_signal, obs, aa, policy, mask
 
-    def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, mask, random_starts=False):
+    def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, mask, random_starts=False, max_t=None):
 
         # inputs
         s = state[:, :-1, :]  # state at time t
@@ -206,6 +206,11 @@ class ModelMCTSLearner:
             s = s[:, start:]
             a = a[:, start:]
             y = y[:, start:]
+
+        if max_t:
+            s = s[:, :max_t]
+            a = a[:, :max_t]
+            y = y[:, :max_t]
 
         return s, a, y
 
@@ -241,7 +246,7 @@ class ModelMCTSLearner:
         self.policy_model.eval()
 
         with torch.no_grad():
-            state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts)
+            state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts, max_t=self.args.model_timesteps)
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
@@ -288,7 +293,7 @@ class ModelMCTSLearner:
 
         for e in range(self.args.model_epochs):
             # get data
-            state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts)
+            state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts, max_t=self.args.model_timesteps)
 
             # make predictions
             yp, _ = self.run_model(state, actions)
@@ -375,39 +380,39 @@ class ModelMCTSLearner:
 
         # find leaf nodes
         q = queue.Queue()
-        q.put(tree)
+        q.put(tree, False)
         leaves = []
         while not q.empty():
-            n = q.get()
+            n = q.get(False)
             if len(n.children) == 0:
                 leaves.append(n)
             else:
                 for k, v in n.children.items():
-                    q.put(v)
+                    q.put(v, False)
 
         # backup from leaf nodes
         for l in leaves:
-            q.put(l)
+            q.put(l, False)
         while not q.empty():
-            n = q.get()
+            n = q.get(False)
             if not n.is_root and not n.touched:
                 if len(n.children) > 0:
                     if all([v.touched for k, v in n.children.items()]):
                         n.parent.return_ += n.return_
                         n.touched = True
-                        q.put(n.parent)
+                        q.put(n.parent, False)
                 else:
                     n.parent.return_ += n.return_
                     n.touched = True
-                    q.put(n.parent)
+                    q.put(n.parent, False)
 
         # traverse tree and normalise returns by visit count
-        q.put(tree)
+        q.put(tree, False)
         while not q.empty():
-            n = q.get()
+            n = q.get(False)
             n.expected_return = n.return_ / n.visits
             for c in list(n.children.values()):
-                q.put(c)
+                q.put(c, False)
 
         #print(f"leaves: {len(leaves)}")
         #print(f"total reward: {r_total:.2f}, backed up: {tree.return_:.2f}")

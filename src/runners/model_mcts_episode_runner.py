@@ -75,13 +75,13 @@ class ModelMCTSEpisodeRunner:
             if use_tree:
                 t_op_start = time.time()
                 tree = self.model.build_tree(self.batch, self.t_env, self.t)
-                print(f"Building search tree: {time.time() - t_op_start: .2f} s")
+                #print(f"Building search tree: {time.time() - t_op_start: .2f} s")
 
                 # select action from tree
                 options = [self.model.hash_to_list(x) for x in list(tree.children.keys())]
                 ranked = sorted([([o], tree.children[self.model.list_to_hash(o)]) for o in options], key=lambda x: x[1].expected_return, reverse=True)
                 actions, node = ranked[0] # select best
-                print("selected: ", node)
+                #print("selected: ", node)
                 expected_mcts_return += node.expected_reward
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
