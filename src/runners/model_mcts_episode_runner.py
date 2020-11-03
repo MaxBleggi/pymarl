@@ -3,6 +3,7 @@ from functools import partial
 from components.episode_buffer import EpisodeBatch
 import numpy as np
 import torch
+import time
 
 class ModelMCTSEpisodeRunner:
 
@@ -46,7 +47,7 @@ class ModelMCTSEpisodeRunner:
         self.env.reset()
         self.t = 0
 
-    def run(self, tree=None, test_mode=False):
+    def run(self, use_tree=False, test_mode=False):
         self.reset()
 
         terminated = False
@@ -55,7 +56,6 @@ class ModelMCTSEpisodeRunner:
         mcts_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
 
-        node = tree if tree is not None else None
         while not terminated:
 
             avail_actions = self.env.get_avail_actions()
@@ -70,27 +70,26 @@ class ModelMCTSEpisodeRunner:
             # Pass the entire batch of experiences up till now to the agents
             # Receive the actions for each agent at this timestep in a batch of size 1
 
-            if node:
-                avail_actions = torch.tensor(avail_actions, dtype=torch.int32)
-                options = torch.tensor([self.model.hash_to_list(x) for x in list(node.children.keys())], dtype=torch.int64)
-                valid = [o.tolist() for o in options if torch.all(avail_actions.gather(1, o.unsqueeze(1)).bool())]
-                if len(valid) == 0:
-                    print("no valid options found at timestep:", self.t, "reverting to policy")
-                    node = None
-                    actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
-                else:
-                    ranked = sorted([([o], node.children[self.model.list_to_hash(o)]) for o in valid], key=lambda x: x[1].expected_return, reverse=True)
-                    actions, node = ranked[0] # select best
-                    print("selected: ", node)
-                    expected_mcts_return += node.expected_reward
-                    
+            # build search tree
+            tree = None
+            if use_tree:
+                t_op_start = time.time()
+                tree = self.model.build_tree(self.batch, self.t_env, self.t)
+                print(f"Building search tree: {time.time() - t_op_start: .2f} s")
+
+                # select action from tree
+                options = [self.model.hash_to_list(x) for x in list(tree.children.keys())]
+                ranked = sorted([([o], tree.children[self.model.list_to_hash(o)]) for o in options], key=lambda x: x[1].expected_return, reverse=True)
+                actions, node = ranked[0] # select best
+                print("selected: ", node)
+                expected_mcts_return += node.expected_reward
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
 
             reward, terminated, env_info = self.env.step(actions[0])
 
             episode_return += reward
-            if node:
+            if tree:
                 mcts_return += reward
 
             post_transition_data = {

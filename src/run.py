@@ -195,7 +195,6 @@ def run_sequential(args, logger):
     t_op_start = 0
 
     # model based vars
-    mcts_used = False
     model_trained = False
     tree = None
 
@@ -206,13 +205,11 @@ def run_sequential(args, logger):
         t_op_start = time.time()
         # alternate between H and standard epsilon greedy
         if model_trained:
-            episode_batch, episode_return, mcts_return, expected_mcts_return = runner.run(tree=tree, test_mode=False)
-            mcts_used = True
+            episode_batch, episode_return, mcts_return, expected_mcts_return = runner.run(use_tree=True, test_mode=False)
             print(
                 f"MCTS: return {episode_return:.3f} mcts_return: {mcts_return:.3f} expected_mcts_return: {expected_mcts_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
-            episode_batch, episode_return, _, _ = runner.run(tree=None, test_mode=False)
-            mcts_used = False
+            episode_batch, episode_return, _, _ = runner.run(use_tree=False, test_mode=False)
             print(
                 f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
@@ -243,11 +240,6 @@ def run_sequential(args, logger):
                 model_trained = True
             print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
-            # build search tree
-            if model_trained:
-                t_op_start = time.time()
-                tree = model.build_tree(buffer.sample(1), runner.t_env)
-                print(f"Building search tree: {time.time() - t_op_start: .2f} s")
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)

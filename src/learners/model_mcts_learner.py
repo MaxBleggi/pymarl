@@ -348,11 +348,12 @@ class ModelMCTSLearner:
     def hash_to_list(self, h):
         return [int(x) for x in h.split('-')]
 
-    def build_tree(self, batch, t_env):
+    def build_tree(self, batch, t_env, t_start=0):
 
         # generate action history reward and valid timestep mask across batch
-        actions, reward, mask, last_t = self.generate_batch(batch, t_env)
+        q_values, actions, reward, mask = self.generate_batch(batch, t_env, t_start)
         nb, nt, _ = reward.size()
+        k = self.args.model_rollout_timesteps
 
         # build tree
         r_total = 0
@@ -362,10 +363,14 @@ class ModelMCTSLearner:
             for t in range(nt):
                 if mask[b, t].bool().item():
                     name = list_to_hash(actions[b, t].tolist())
-                    r = reward[b, t].item()
+                    r = self.args.gamma ** t * reward[b, t].item()
+                    if k and t == k - 1:
+                        # for the final action, use the action value estimate instead of the model reward
+                        r = q_values[b, t].sum()
                     node = node.add(name, reward=r).visit()
                     r_total += r
                 else:
+                    # terminated trajectory
                     break
 
         # find leaf nodes
@@ -404,12 +409,12 @@ class ModelMCTSLearner:
             for c in list(n.children.values()):
                 q.put(c)
 
-        print(f"leaves: {len(leaves)}")
-        print(f"total reward: {r_total:.2f}, backed up: {tree.return_:.2f}")
+        #print(f"leaves: {len(leaves)}")
+        #print(f"total reward: {r_total:.2f}, backed up: {tree.return_:.2f}")
 
         return tree
 
-    def generate_batch(self, batch, t_env):
+    def generate_batch(self, batch, t_env, t_start=0):
 
         if batch.device != self.device:
             batch.to(self.device)
@@ -424,10 +429,10 @@ class ModelMCTSLearner:
         with torch.no_grad():
 
             # get real starting states for the batch
-            state = batch["state"][:, 0, :self.state_size]
-            avail_actions = batch["avail_actions"][:, 0]
+            state = batch["state"][:, t_start, :self.state_size]
+            avail_actions = batch["avail_actions"][:, t_start]
             _, n_agents, n_actions = avail_actions.size()
-            term_signal = batch["terminated"][:, 0].float()
+            term_signal = batch["terminated"][:, t_start].float()
 
             # expand starting states into batch size
             state = state.repeat(batch_size, 1)
@@ -439,9 +444,8 @@ class ModelMCTSLearner:
             active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
 
             # set the number of rollout timesteps
-            k = self.args.model_rollout_timesteps
             max_t = batch.max_seq_length - 1
-            max_t = min(k, max_t) if k else max_t
+            k = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else max_t
 
             # initialise hidden states
             ht, ct = self.dynamics_model.init_hidden(batch_size, self.device) # dynamics model hidden state
@@ -449,16 +453,16 @@ class ModelMCTSLearner:
             # reward history
             R = torch.zeros(batch_size, max_t, 1).to(self.device)
 
+            # Q values
+            Q = torch.zeros(batch_size, max_t, n_agents, n_actions).to(self.device)
+
             # action history
             H = torch.zeros(batch_size, max_t, n_agents, dtype=torch.int).to(self.device)
 
             # active episode mask
             M = torch.zeros(batch_size, max_t, 1, dtype=torch.bool).to(self.device)
 
-            # keep track of last timestep
-            last_t = torch.zeros(batch_size).int()
-
-            for t in range(0, max_t):
+            for t in range(0, k):
                 if t == 0:
                     ht = self.representation_model(state)
 
@@ -467,7 +471,8 @@ class ModelMCTSLearner:
                 actions = self.model_mac.select_actions(agent_outputs, avail_actions, t_env)
                 actions_onehot = F.one_hot(actions, num_classes=n_actions)
 
-                # update action history
+                # update action values and action history
+                Q[:, t, ...] = agent_outputs
                 H[:, t, ...] = actions
 
                 # generate next state, reward, termination signal
@@ -488,10 +493,7 @@ class ModelMCTSLearner:
                 # mask active episodes
                 M[active_episodes, t] = True
 
-                # incrementent max timestep
-                last_t[active_episodes] = t
-
-                # if this is the last timestep, terminate
+                # if this is the last allowable timestep, terminate
                 if t == max_t - 1:
                     terminated[active_episodes] = True
 
@@ -511,7 +513,7 @@ class ModelMCTSLearner:
                 if all(terminated):
                     break
 
-            return H, R, M, last_t
+            return Q, H, R, M
 
     def cuda(self):
         if self.dynamics_model:
