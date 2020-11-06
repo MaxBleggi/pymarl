@@ -36,13 +36,13 @@ model_test_ratio: 0.1
 model_learning_rate: 0.01
 model_grad_clip_norm: 0.01
 model_batch_size: 32
-model_epochs: 10 # per RL step
+model_epochs: 100 # per RL step
 model_log_epochs: 10
 model_random_starts: True
-model_timesteps: # default is to use all available timesteps
+model_timesteps: 10 # default is to use all available timesteps
 
 # rollouts
-model_rollout_timesteps: # default to max scenario timesteps
+model_rollout_timesteps: 10 # default to max scenario timesteps
 model_rollout_batch_size: 256
 model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold

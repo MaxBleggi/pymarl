@@ -378,26 +378,27 @@ class ModelMCTSLearner:
         for e in range(nb):
             initial_action = list_to_hash(actions[e, 0].tolist())
             if initial_action not in cum_G:
-                cum_G[initial_action] = (G[e].item(), 1)
+                cum_G[initial_action] = (G[e].item(), rewards[e, 0].item(), 1)
             else:
-                return_, count = cum_G[initial_action]
+                return_, reward, count = cum_G[initial_action]
                 return_ += G[e].item()
+                reward += rewards[e, 0].item()
                 count += 1
-                cum_G[initial_action] = (return_, count)
+                cum_G[initial_action] = (return_, reward, count)
 
         # caluculate expected returns using visit counts
         exp_G = {}
-        for initial_action, (return_, count) in cum_G.items():
-            exp_G[initial_action] = return_ / count
+        for initial_action, (return_, reward, count) in cum_G.items():
+            exp_G[initial_action] = (return_ / count, reward / count)
 
         # rank starting actions by expected reuturn
-        ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1])]
+        ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1][0])]
 
         # select best action
-        best_action, expected_return = hash_to_list(ranked_G[0][0]), ranked_G[0][1]
+        best_action, expected_return, expected_reward = hash_to_list(ranked_G[0][0]), ranked_G[0][1][0], ranked_G[0][1][1]
 
         #print(f"Selected best action: {time.time() - t_op_start: .3f} s")
-        return [best_action], expected_return
+        return [best_action], expected_return, expected_reward
 
 
     def build_tree(self, batch, t_env, t_start=0):

@@ -76,9 +76,9 @@ class ModelMCTSEpisodeRunner:
             # build search tree
             if use_search:
                 t_op_start = time.time()
-                actions, return_ = self.model.mcts(self.batch, self.t_env, self.t)
-                print(f"Search time: {time.time() - t_op_start: .2f} s")
-                expected_mcts_return += return_
+                actions, return_, r = self.model.mcts(self.batch, self.t_env, self.t)
+                print(f"T={self.t}: search time: {time.time() - t_op_start: .2f} s")
+                expected_mcts_return += r
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
 
