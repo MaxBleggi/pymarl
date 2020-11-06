@@ -58,6 +58,7 @@ class ModelMCTSEpisodeRunner:
 
         if use_search:
             print(f"Generating trajectories with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
+            t_op_start = time.time()
 
         while not terminated:
 
@@ -75,18 +76,16 @@ class ModelMCTSEpisodeRunner:
 
             # build search tree
             if use_search:
-                t_op_start = time.time()
                 actions, return_, r = self.model.mcts(self.batch, self.t_env, self.t)
-                print(f"T={self.t}: search time: {time.time() - t_op_start: .2f} s")
                 expected_mcts_return += r
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
 
             reward, terminated, env_info = self.env.step(actions[0])
-
             episode_return += reward
+
             if use_search:
-                mcts_return += reward
+                print(f"t={self.t}: reward={reward:.2f}, expected reward={r:.2f}")
 
             post_transition_data = {
                 "actions": actions,
@@ -105,6 +104,9 @@ class ModelMCTSEpisodeRunner:
             "obs": [self.env.get_obs()]
         }
         self.batch.update(last_data, ts=self.t)
+
+        if use_search:
+            print(f"Search time: {time.time() - t_op_start:.2f} s")
 
         # Select actions in the last stored state
         actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
@@ -131,7 +133,7 @@ class ModelMCTSEpisodeRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        return self.batch, episode_return, mcts_return, expected_mcts_return
+        return self.batch, episode_return, expected_mcts_return
 
     def _log(self, returns, stats, prefix):
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)

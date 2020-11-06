@@ -371,7 +371,7 @@ class ModelMCTSLearner:
         # add action value estimates for non-terminal episodes
         if len(active_episodes) > 0:
             t_end = mask.min(dim=1)[1].flatten()
-            G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1)
+            G[active_episodes, 0] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0]
 
         # calculate cumulative returns for each starting joint-action
         cum_G = {}

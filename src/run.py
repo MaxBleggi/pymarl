@@ -205,11 +205,11 @@ def run_sequential(args, logger):
         t_op_start = time.time()
         # alternate between H and standard epsilon greedy
         if model_trained:
-            episode_batch, episode_return, mcts_return, expected_mcts_return = runner.run(use_search=True, test_mode=False)
+            episode_batch, episode_return, expected_mcts_return = runner.run(use_search=True, test_mode=False)
             print(
                 f"MCTS: return {episode_return:.3f} mcts_return: {mcts_return:.3f} expected_mcts_return: {expected_mcts_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
-            episode_batch, episode_return, _, _ = runner.run(use_search=False, test_mode=False)
+            episode_batch, episode_return, _ = runner.run(use_search=False, test_mode=False)
             print(
                 f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
