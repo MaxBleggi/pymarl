@@ -353,11 +353,58 @@ class ModelMCTSLearner:
     def hash_to_list(self, h):
         return [int(x) for x in h.split('-')]
 
+    def mcts(self, batch, t_env, t_start=0):
+        # generate action history reward and valid timestep mask across batch
+        t_op_start = time.time()
+        q_values, actions, rewards, mask, active_episodes = self.generate_batch(batch, t_env, t_start)
+        #print(f"Generated trajectories: {time.time() - t_op_start: .3f} s")
+
+        t_op_start = time.time()
+        nb, nt, _ = rewards.size()
+        k = self.args.model_rollout_timesteps
+
+        # apply discounting and sum over episode
+        #coeff = torch.pow(self.args.gamma, torch.arange(0, nt)).expand(nb, nt).to(self.device)
+        #rewards = torch.mul(rewards.squeeze(), coeff)
+        G = rewards.sum(dim=1)
+
+        # add action value estimates for non-terminal episodes
+        if len(active_episodes) > 0:
+            t_end = mask.min(dim=1)[1].flatten()
+            G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1)
+
+        # calculate cumulative returns for each starting joint-action
+        cum_G = {}
+        for e in range(nb):
+            initial_action = list_to_hash(actions[e, 0].tolist())
+            if initial_action not in cum_G:
+                cum_G[initial_action] = (G[e].item(), 1)
+            else:
+                return_, count = cum_G[initial_action]
+                return_ += G[e].item()
+                count += 1
+                cum_G[initial_action] = (return_, count)
+
+        # caluculate expected returns using visit counts
+        exp_G = {}
+        for initial_action, (return_, count) in cum_G.items():
+            exp_G[initial_action] = return_ / count
+
+        # rank starting actions by expected reuturn
+        ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1])]
+
+        # select best action
+        best_action, expected_return = hash_to_list(ranked_G[0][0]), ranked_G[0][1]
+
+        #print(f"Selected best action: {time.time() - t_op_start: .3f} s")
+        return [best_action], expected_return
+
+
     def build_tree(self, batch, t_env, t_start=0):
 
         # generate action history reward and valid timestep mask across batch
         t_op_start = time.time()
-        q_values, actions, reward, mask = self.generate_batch(batch, t_env, t_start)
+        q_values, actions, reward, mask, _ = self.generate_batch(batch, t_env, t_start)
         #print(f"Generated trajectories: {time.time() - t_op_start: .3f} s")
 
         nb, nt, _ = reward.size()
@@ -505,8 +552,11 @@ class ModelMCTSLearner:
                 R[:, t, :] = reward.unsqueeze(dim=-1)
 
                 # generate termination mask
-                threshold = self.args.model_term_threshold
-                terminated = (term_signal > threshold)
+                terminated = (term_signal > self.args.model_term_threshold)
+
+                # mask previously terminated episodes to avoid reactivatation
+                inactive_episodes = list(set(range(batch_size)) - set(active_episodes))
+                terminated[inactive_episodes] = False
 
                 # mask active episodes
                 M[active_episodes, t] = True
@@ -515,10 +565,10 @@ class ModelMCTSLearner:
                 if t == max_t - 1:
                     terminated[active_episodes] = True
 
+
                 # generate and threshold avail_actions
                 avail_actions = self.actions_model(ht).view(batch_size, n_agents, n_actions)
-                threshold = self.args.model_action_threshold
-                avail_actions = (avail_actions > threshold).int()
+                avail_actions = (avail_actions > self.args.model_action_threshold).int()
 
                 # handle cases where no agent actions are available e.g. when agent is dead
                 mask = avail_actions.sum(-1) == 0
@@ -531,7 +581,7 @@ class ModelMCTSLearner:
                 if all(terminated):
                     break
 
-            return Q, H, R, M
+            return Q, H, R, M, active_episodes
 
     def cuda(self):
         if self.dynamics_model:

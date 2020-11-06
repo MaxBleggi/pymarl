@@ -47,7 +47,7 @@ class ModelMCTSEpisodeRunner:
         self.env.reset()
         self.t = 0
 
-    def run(self, use_tree=False, test_mode=False):
+    def run(self, use_search=False, test_mode=False):
         self.reset()
 
         terminated = False
@@ -56,7 +56,7 @@ class ModelMCTSEpisodeRunner:
         mcts_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
 
-        if use_tree:
+        if use_search:
             print(f"Generating trajectories with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
 
         while not terminated:
@@ -74,25 +74,18 @@ class ModelMCTSEpisodeRunner:
             # Receive the actions for each agent at this timestep in a batch of size 1
 
             # build search tree
-            tree = None
-            if use_tree:
+            if use_search:
                 t_op_start = time.time()
-                tree = self.model.build_tree(self.batch, self.t_env, self.t)
-                #print(f"Building search tree: {time.time() - t_op_start: .2f} s")
-
-                # select action from tree
-                options = [self.model.hash_to_list(x) for x in list(tree.children.keys())]
-                ranked = sorted([([o], tree.children[self.model.list_to_hash(o)]) for o in options], key=lambda x: x[1].expected_return, reverse=True)
-                actions, node = ranked[0] # select best
-                #print("selected: ", node)
-                expected_mcts_return += node.expected_reward
+                actions, return_ = self.model.mcts(self.batch, self.t_env, self.t)
+                print(f"Search time: {time.time() - t_op_start: .2f} s")
+                expected_mcts_return += return_
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
 
             reward, terminated, env_info = self.env.step(actions[0])
 
             episode_return += reward
-            if tree:
+            if use_search:
                 mcts_return += reward
 
             post_transition_data = {
