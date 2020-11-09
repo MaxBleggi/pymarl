@@ -36,10 +36,11 @@ model_test_ratio: 0.1
 model_learning_rate: 0.01
 model_grad_clip_norm: 0.01
 model_batch_size: 32
-model_epochs: 10 # per RL step
+model_intitial_epochs: 100
+model_epochs: 20 # per RL step
 model_log_epochs: 10
 model_random_starts: True
-model_timesteps: # default is to use all available timesteps
+model_timesteps:  # default is to use all available timesteps
 
 # rollouts
 model_rollout_timesteps: # default to max scenario timesteps
@@ -51,7 +52,7 @@ model_action_threshold: 0.5 # # masks available action outputs at this threshold
 model_mac: "model_mac"
 model_action_selector: "model_epsilon_greedy"
 model_epsilon_start: 1.0
-model_epsilon_finish: 0.05
+model_epsilon_finish: 0.5
 model_epsilon_anneal_time: 25000
 model_epsilon_delay: 0
 

@@ -207,7 +207,7 @@ def run_sequential(args, logger):
         if model_trained:
             episode_batch, episode_return, expected_mcts_return = runner.run(use_search=True, test_mode=False)
             print(
-                f"MCTS: return {episode_return:.3f} mcts_return: {mcts_return:.3f} expected_mcts_return: {expected_mcts_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"MCTS: return {episode_return:.3f} expected_mcts_return: {expected_mcts_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
             episode_batch, episode_return, _ = runner.run(use_search=False, test_mode=False)
             print(
@@ -234,13 +234,13 @@ def run_sequential(args, logger):
                 print(f"RL step: {time.time() - t_op_start: .2f} s")
 
 
-            if buffer.can_sample(args.model_min_samples):
-                # train environment model
-                t_op_start = time.time()
-                model.train(buffer)
-                if not model_trained:
-                    model_trained = True
-                print(f"Model training step: {time.time() - t_op_start: .2f} s")
+        if buffer.can_sample(args.model_min_samples) and buffer.can_sample(args.model_batch_size):
+            # train environment model
+            t_op_start = time.time()
+            model.train(buffer)
+            if not model_trained:
+                model_trained = True
+            print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
 
         # Execute test runs once in a while

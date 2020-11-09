@@ -57,7 +57,7 @@ class ModelMCTSEpisodeRunner:
         self.mac.init_hidden(batch_size=self.batch_size)
 
         if use_search:
-            print(f"Generating trajectories with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
+            print(f"Generating {self.args.model_rollout_batch_size} rollouts of depth {self.args.model_rollout_timesteps} with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
             t_op_start = time.time()
 
         while not terminated:
@@ -85,7 +85,8 @@ class ModelMCTSEpisodeRunner:
             episode_return += reward
 
             if use_search:
-                print(f"t={self.t}: reward={reward:.2f}, expected reward={r:.2f}")
+                #print(f"t={self.t}: actions: {actions[0]} reward={reward:.2f}, expected reward={r:.2f}")
+                pass
 
             post_transition_data = {
                 "actions": actions,

@@ -1,6 +1,7 @@
 import time
 import torch
 import torch.nn.functional as F
+from torch.distributions import Categorical
 
 from modules.models.representation import RepresentationModel
 from modules.models.dynamics import DynamicsModel
@@ -123,6 +124,7 @@ class ModelMCTSLearner:
         self.save_index = 0
 
         self.random_starts = self.args.model_random_starts
+        self.model_trained = False
 
         # debugging
         if self.args.model_save_val_data:
@@ -291,7 +293,7 @@ class ModelMCTSLearner:
         self.actions_model.train()
         self.policy_model.train()
 
-        for e in range(self.args.model_epochs):
+        for e in range(self.args.model_epochs if self.model_trained else self.args.model_intitial_epochs):
             # get data
             state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts, max_t=self.args.model_timesteps)
 
@@ -314,6 +316,9 @@ class ModelMCTSLearner:
             self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
             self.train_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
 
+            #if not self.model_trained:
+            #print(f"epoch: {e} losses: train: {self.train_loss:.4f}, reward: {self.train_r_loss:.4f} term: {self.train_T_loss:.4f} aa: {self.train_aa_loss:.4f} pi: {self.train_p_loss:.4f} return: {self.train_return_loss:.4f}")
+
     def train(self, buffer):
 
         # train models
@@ -328,6 +333,8 @@ class ModelMCTSLearner:
 
         vars = self.get_episode_vars(batch)
         self._train(vars)
+        if not self.model_trained:
+            self.model_trained = True
 
         self.epochs += 1
 
@@ -371,7 +378,7 @@ class ModelMCTSLearner:
         # add action value estimates for non-terminal episodes
         if len(active_episodes) > 0:
             t_end = mask.min(dim=1)[1].flatten()
-            G[active_episodes, 0] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0]
+            G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0].unsqueeze(dim=1)
 
         # calculate cumulative returns for each starting joint-action
         cum_G = {}
@@ -391,14 +398,32 @@ class ModelMCTSLearner:
         for initial_action, (return_, reward, count) in cum_G.items():
             exp_G[initial_action] = (return_ / count, reward / count)
 
-        # rank starting actions by expected reuturn
-        ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1][0])]
+        # rank starting actions by expected return
+        ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1][0], reverse=True)]
+        ranked_actions, action_returns_and_rewards = zip(*ranked_G)
+        action_returns, action_reward = zip(*action_returns_and_rewards)
 
-        # select best action
-        best_action, expected_return, expected_reward = hash_to_list(ranked_G[0][0]), ranked_G[0][1][0], ranked_G[0][1][1]
+        # softmax action selection
+
+        # select action
+        # argmax selection policy
+        selected_idx = 0
+
+        # softmax selection policy
+        #probs = F.softmax(torch.tensor(action_returns), dim=0)
+        #print(probs)
+        #selected_idx = Categorical(probs).sample().item()
+
+        # epsilon greedy selection policy
+        #if np.random.rand() < self.model_mac.action_selector.epsilon:
+        #    selected_idx = np.random.choice(len(ranked_actions))
+
+        selected_action = [hash_to_list(ranked_actions[selected_idx])]
+        selected_return = action_returns[selected_idx]
+        selected_reward = action_reward[selected_idx]
 
         #print(f"Selected best action: {time.time() - t_op_start: .3f} s")
-        return [best_action], expected_return, expected_reward
+        return selected_action, selected_return, selected_reward
 
 
     def build_tree(self, batch, t_env, t_start=0):
