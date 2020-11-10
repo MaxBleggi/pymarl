@@ -47,7 +47,7 @@ class ModelMCTSEpisodeRunner:
         self.env.reset()
         self.t = 0
 
-    def run(self, use_search=False, test_mode=False):
+    def run(self, use_tree=False, test_mode=False):
         self.reset()
 
         terminated = False
@@ -55,10 +55,6 @@ class ModelMCTSEpisodeRunner:
         expected_mcts_return, mcts_return = 0, 0
         mcts_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
-
-        if use_search:
-            print(f"Generating {self.args.model_rollout_batch_size} rollouts of depth {self.args.model_rollout_timesteps} with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
-            t_op_start = time.time()
 
         while not terminated:
 
@@ -75,18 +71,26 @@ class ModelMCTSEpisodeRunner:
             # Receive the actions for each agent at this timestep in a batch of size 1
 
             # build search tree
-            if use_search:
-                actions, return_, r = self.model.mcts(self.batch, self.t_env, self.t)
-                expected_mcts_return += r
+            tree = None
+            if use_tree:
+                t_op_start = time.time()
+                tree = self.model.build_tree(self.batch, self.t_env, self.t)
+                print(f"Building search tree: {time.time() - t_op_start: .2f} s")
+
+                # select action from tree
+                options = [self.model.hash_to_list(x) for x in list(tree.children.keys())]
+                ranked = sorted([([o], tree.children[self.model.list_to_hash(o)]) for o in options], key=lambda x: x[1].expected_return, reverse=True)
+                actions, node = ranked[0] # select best
+                #print("selected: ", node)
+                expected_mcts_return += node.expected_reward
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
 
             reward, terminated, env_info = self.env.step(actions[0])
-            episode_return += reward
 
-            if use_search:
-                #print(f"t={self.t}: actions: {actions[0]} reward={reward:.2f}, expected reward={r:.2f}")
-                pass
+            episode_return += reward
+            if tree:
+                mcts_return += reward
 
             post_transition_data = {
                 "actions": actions,
@@ -105,9 +109,6 @@ class ModelMCTSEpisodeRunner:
             "obs": [self.env.get_obs()]
         }
         self.batch.update(last_data, ts=self.t)
-
-        if use_search:
-            print(f"Search time: {time.time() - t_op_start:.2f} s")
 
         # Select actions in the last stored state
         actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
@@ -134,7 +135,7 @@ class ModelMCTSEpisodeRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        return self.batch, episode_return, expected_mcts_return
+        return self.batch, episode_return, mcts_return, expected_mcts_return
 
     def _log(self, returns, stats, prefix):
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
