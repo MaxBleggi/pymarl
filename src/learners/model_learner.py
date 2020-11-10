@@ -274,8 +274,8 @@ class ModelLearner:
         if batch.device != self.args.device:
             batch.to(self.args.device)
 
-            vars = self.get_episode_vars(batch)
-            self._train(vars)
+        vars = self.get_episode_vars(batch)
+        self._train(vars)
 
         self.epochs += 1
 
@@ -287,8 +287,9 @@ class ModelLearner:
             if batch.device != self.args.device:
                 batch.to(self.args.device)
 
-                vars = self.get_episode_vars(batch)
-                self._validate(vars)
+            vars = self.get_episode_vars(batch)
+            self._validate(vars)
+
             self.epochs = 0
 
     def generate_batch(self, buffer, t_env):
