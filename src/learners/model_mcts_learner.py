@@ -400,6 +400,7 @@ class ModelMCTSLearner:
 
         # rank starting actions by expected return
         ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1][0], reverse=True)]
+        #print(ranked_G)
         ranked_actions, action_returns_and_rewards = zip(*ranked_G)
         action_returns, action_reward = zip(*action_returns_and_rewards)
 
