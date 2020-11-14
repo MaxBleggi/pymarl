@@ -123,7 +123,7 @@ class ModelMCTSLearner:
         self.epochs = 0
         self.save_index = 0
 
-        self.random_starts = self.args.model_random_starts
+        self.rolling_starts = self.args.model_rolling_starts
         self.model_trained = False
 
         # debugging
@@ -188,7 +188,7 @@ class ModelMCTSLearner:
 
         return state, action, reward, term_signal, obs, aa, policy, mask
 
-    def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, mask, random_starts=False, max_t=None):
+    def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, mask, start_t=0, max_t=None):
 
         # inputs
         s = state[:, :-1, :]  # state at time t
@@ -203,11 +203,14 @@ class ModelMCTSLearner:
 
         y = torch.cat((r, T, nav, pt), dim=-1)
 
-        if random_starts:
+        if start_t == "random":
             start = int(random.random() * (s.size()[1] - 1))
-            s = s[:, start:]
-            a = a[:, start:]
-            y = y[:, start:]
+        else:
+            start = start_t
+
+        s = s[:, start:]
+        a = a[:, start:]
+        y = y[:, start:]
 
         if max_t:
             s = s[:, :max_t]
@@ -215,6 +218,7 @@ class ModelMCTSLearner:
             y = y[:, :max_t]
 
         return s, a, y
+
 
     def run_model(self, state, actions, ht_ct=None):
 
@@ -248,7 +252,7 @@ class ModelMCTSLearner:
         self.policy_model.eval()
 
         with torch.no_grad():
-            state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts, max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t=0, max_t=self.args.model_timesteps)
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
@@ -285,6 +289,47 @@ class ModelMCTSLearner:
         print(f" -- policy: train {self.train_p_loss:.5f} val {self.val_p_loss:.5f}")
         print(f" -- return: train {self.train_return_loss:.5f} val {self.val_return_loss:.5f}")
 
+    def _train_rolling(self, vars, max_t):
+        # learning a termination signal is easier with unmasked input
+
+        self.representation_model.train()
+        self.dynamics_model.train()
+        self.actions_model.train()
+        self.policy_model.train()
+
+        rollout_timesteps = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else 0
+        for e in range(self.args.model_epochs if self.model_trained else self.args.model_intitial_epochs):
+
+            timesteps = list(range(max_t.item() - rollout_timesteps - 2))
+            random.shuffle(timesteps)
+            for t in timesteps:
+
+                # get data
+                state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_timesteps)
+                #print(t, max_t.item(), rollout_timesteps, t + rollout_timesteps, state.size())
+
+                # make predictions
+                yp, _ = self.run_model(state, actions)
+
+                # gradient descent
+                self.optimizer.zero_grad()
+                loss_vector = F.mse_loss(yp, y, reduction='none')
+                loss = loss_vector.mean()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
+                self.optimizer.step()
+
+                # record losses
+                self.train_loss = loss.item()
+                self.train_r_loss = loss_vector[:, :, 0].mean()
+                self.train_T_loss = loss_vector[:, :, 1].mean()
+                self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
+                self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
+                self.train_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
+
+                # if not self.model_trained:
+                print(f"epoch: {e+1} losses: train: {self.train_loss:.4f}, reward: {self.train_r_loss:.4f} term: {self.train_T_loss:.4f} aa: {self.train_aa_loss:.4f} pi: {self.train_p_loss:.4f} return: {self.train_return_loss:.4f}")
+
     def _train(self, vars):
         # learning a termination signal is easier with unmasked input
 
@@ -294,8 +339,9 @@ class ModelMCTSLearner:
         self.policy_model.train()
 
         for e in range(self.args.model_epochs if self.model_trained else self.args.model_intitial_epochs):
+
             # get data
-            state, actions, y = self.get_model_input_output(*vars, random_starts=self.random_starts, max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t=0, max_t=self.args.model_timesteps)
 
             # make predictions
             yp, _ = self.run_model(state, actions)
@@ -317,7 +363,7 @@ class ModelMCTSLearner:
             self.train_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
 
             #if not self.model_trained:
-            #print(f"epoch: {e} losses: train: {self.train_loss:.4f}, reward: {self.train_r_loss:.4f} term: {self.train_T_loss:.4f} aa: {self.train_aa_loss:.4f} pi: {self.train_p_loss:.4f} return: {self.train_return_loss:.4f}")
+            print(f"epoch: {e+1} losses: train: {self.train_loss:.4f}, reward: {self.train_r_loss:.4f} term: {self.train_T_loss:.4f} aa: {self.train_aa_loss:.4f} pi: {self.train_p_loss:.4f} return: {self.train_return_loss:.4f}")
 
     def train(self, buffer):
 
@@ -332,7 +378,10 @@ class ModelMCTSLearner:
             batch.to(self.args.device)
 
         vars = self.get_episode_vars(batch)
-        self._train(vars)
+        if self.rolling_starts:
+            self._train_rolling(vars, max_ep_t)
+        else:
+            self._train(vars)
         if not self.model_trained:
             self.model_trained = True
 
@@ -374,11 +423,17 @@ class ModelMCTSLearner:
         #coeff = torch.pow(self.args.gamma, torch.arange(0, nt)).expand(nb, nt).to(self.device)
         #rewards = torch.mul(rewards.squeeze(), coeff)
         G = rewards.sum(dim=1)
+        print(f"t={t_start} Returns")
+        print(G.flatten())
 
         # add action value estimates for non-terminal episodes
         if len(active_episodes) > 0:
             t_end = mask.min(dim=1)[1].flatten()
             G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0].unsqueeze(dim=1)
+
+        G_flat = G.flatten().cpu()
+        print(f"t={t_start} Returns Histogram")
+        print(np.histogram(G_flat))
 
         # calculate cumulative returns for each starting joint-action
         cum_G = {}
@@ -393,14 +448,20 @@ class ModelMCTSLearner:
                 count += 1
                 cum_G[initial_action] = (return_, reward, count)
 
+
         # caluculate expected returns using visit counts
         exp_G = {}
         for initial_action, (return_, reward, count) in cum_G.items():
             exp_G[initial_action] = (return_ / count, reward / count)
 
+        print(f"t={t_start} Expected Returns per Action")
+        print(exp_G)
+
         # rank starting actions by expected return
         ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1][0], reverse=True)]
-        #print(ranked_G)
+        print(np.histogram(np.array([x[1][0] for x in ranked_G])))
+        print(f"t={t_start} Ranked Returns")
+        print(ranked_G)
         ranked_actions, action_returns_and_rewards = zip(*ranked_G)
         action_returns, action_reward = zip(*action_returns_and_rewards)
 

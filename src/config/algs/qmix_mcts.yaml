@@ -36,10 +36,10 @@ model_test_ratio: 0.1
 model_learning_rate: 0.01
 model_grad_clip_norm: 0.01
 model_batch_size: 32
-model_intitial_epochs: 100
-model_epochs: 20 # per RL step
+model_intitial_epochs: 1
+model_epochs: 1 # per RL step
 model_log_epochs: 10
-model_random_starts: True
+model_rolling_starts: True
 model_timesteps:  # default is to use all available timesteps
 
 # rollouts
