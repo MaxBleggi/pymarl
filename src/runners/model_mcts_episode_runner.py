@@ -93,6 +93,8 @@ class ModelMCTSEpisodeRunner:
 
                 actions = H_actions.unsqueeze(0)
                 expected_return += R[h_index]
+                print(
+                    f"t={self.t}: actions: {actions[0].tolist()} reward={reward:.2f}, expected reward={R[h_index]:.2f}")
                 h_index += 1
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
@@ -100,10 +102,6 @@ class ModelMCTSEpisodeRunner:
                 print(f"reward: {reward}")
 
             episode_return += reward
-
-            if use_search:
-                print(f"t={self.t}: actions: {actions[0].tolist()} reward={reward:.2f}, expected reward={R[h_index]:.2f}")
-                pass
 
             post_transition_data = {
                 "actions": actions,
