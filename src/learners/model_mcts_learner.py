@@ -438,7 +438,7 @@ class ModelMCTSLearner:
         selected = G_ranked[0]
 
         H = actions[selected[0]]  # take the best candidate
-        G = selected[1] # expected return for this candidate
+        #G = selected[1] # expected return for this candidate
 
         return H, rewards[selected[0]]
 

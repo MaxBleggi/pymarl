@@ -97,11 +97,12 @@ class ModelMCTSEpisodeRunner:
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                 reward, terminated, env_info = self.env.step(actions[0])
+                print(f"reward: {reward}")
 
             episode_return += reward
 
             if use_search:
-                print(f"t={self.t}: actions: {actions[0]} reward={reward:.2f}, expected reward={R[h_index]:.2f}")
+                print(f"t={self.t}: actions: {actions[0].tolist()} reward={reward:.2f}, expected reward={R[h_index]:.2f}")
                 pass
 
             post_transition_data = {
