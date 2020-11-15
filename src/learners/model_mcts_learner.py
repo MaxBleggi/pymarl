@@ -420,7 +420,7 @@ class ModelMCTSLearner:
         k = self.args.model_rollout_timesteps
 
         # apply discounting and sum over episode
-        coeff = torch.pow(self.args.gamma, torch.arange(0, nt)).expand(nb, nt).to(self.device)
+        coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
         rewards = torch.mul(rewards.squeeze(), coeff)
         G = rewards.sum(dim=1)
         print(f"t={t_start} Returns")
