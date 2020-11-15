@@ -420,72 +420,27 @@ class ModelMCTSLearner:
         k = self.args.model_rollout_timesteps
 
         # apply discounting and sum over episode
-        #coeff = torch.pow(self.args.gamma, torch.arange(0, nt)).expand(nb, nt).to(self.device)
-        #rewards = torch.mul(rewards.squeeze(), coeff)
+        coeff = torch.pow(self.args.gamma, torch.arange(0, nt)).expand(nb, nt).to(self.device)
+        rewards = torch.mul(rewards.squeeze(), coeff)
         G = rewards.sum(dim=1)
         print(f"t={t_start} Returns")
-        print(G.flatten())
+        print(np.histogram(G.flatten().to("cpu")))
 
         # add action value estimates for non-terminal episodes
         if len(active_episodes) > 0:
             t_end = mask.min(dim=1)[1].flatten()
             G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0].unsqueeze(dim=1)
 
-        G_flat = G.flatten().cpu()
-        print(f"t={t_start} Returns Histogram")
-        print(np.histogram(G_flat))
 
-        # calculate cumulative returns for each starting joint-action
-        cum_G = {}
-        for e in range(nb):
-            initial_action = list_to_hash(actions[e, 0].tolist())
-            if initial_action not in cum_G:
-                cum_G[initial_action] = (G[e].item(), rewards[e, 0].item(), 1)
-            else:
-                return_, reward, count = cum_G[initial_action]
-                return_ += G[e].item()
-                reward += rewards[e, 0].item()
-                count += 1
-                cum_G[initial_action] = (return_, reward, count)
+        # rank and select action history H by discounted return G
+        G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]
+        G_ranked.sort(key=lambda x: x[1], reverse=True)
+        selected = G_ranked[0]
 
+        H = actions[selected[0]]  # take the best candidate
+        G = selected[1] # expected return for this candidate
 
-        # caluculate expected returns using visit counts
-        exp_G = {}
-        for initial_action, (return_, reward, count) in cum_G.items():
-            exp_G[initial_action] = (return_ / count, reward / count)
-
-        print(f"t={t_start} Expected Returns per Action")
-        print(exp_G)
-
-        # rank starting actions by expected return
-        ranked_G = [(k, v) for k, v in sorted(exp_G.items(), key=lambda item: item[1][0], reverse=True)]
-        print(np.histogram(np.array([x[1][0] for x in ranked_G])))
-        print(f"t={t_start} Ranked Returns")
-        print(ranked_G)
-        ranked_actions, action_returns_and_rewards = zip(*ranked_G)
-        action_returns, action_reward = zip(*action_returns_and_rewards)
-
-        # softmax action selection
-
-        # select action
-        # argmax selection policy
-        selected_idx = 0
-
-        # softmax selection policy
-        #probs = F.softmax(torch.tensor(action_returns), dim=0)
-        #print(probs)
-        #selected_idx = Categorical(probs).sample().item()
-
-        # epsilon greedy selection policy
-        #if np.random.rand() < self.model_mac.action_selector.epsilon:
-        #    selected_idx = np.random.choice(len(ranked_actions))
-
-        selected_action = [hash_to_list(ranked_actions[selected_idx])]
-        selected_return = action_returns[selected_idx]
-        selected_reward = action_reward[selected_idx]
-
-        #print(f"Selected best action: {time.time() - t_op_start: .3f} s")
-        return selected_action, selected_return, selected_reward
+        return H, rewards[selected[0]]
 
 
     def build_tree(self, batch, t_env, t_start=0):
@@ -597,7 +552,7 @@ class ModelMCTSLearner:
             active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
 
             # set the number of rollout timesteps
-            max_t = batch.max_seq_length - 1
+            max_t = batch.max_seq_length - t_start - 1
             k = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else max_t
 
             # initialise hidden states
@@ -615,6 +570,7 @@ class ModelMCTSLearner:
             # active episode mask
             M = torch.zeros(batch_size, max_t, 1, dtype=torch.bool).to(self.device)
 
+            print(f"Rolling out {k} timesteps")
             for t in range(0, k):
                 if t == 0:
                     ht = self.representation_model(state)

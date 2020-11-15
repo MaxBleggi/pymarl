@@ -52,10 +52,11 @@ class ModelMCTSEpisodeRunner:
 
         terminated = False
         episode_return = 0
-        expected_mcts_return, mcts_return = 0, 0
-        mcts_return = 0
+        expected_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
 
+        H, R = None, None
+        h_index = 0
         if use_search:
             print(f"Generating {self.args.model_rollout_batch_size} rollouts of depth {self.args.model_rollout_timesteps} with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
             t_op_start = time.time()
@@ -74,18 +75,33 @@ class ModelMCTSEpisodeRunner:
             # Pass the entire batch of experiences up till now to the agents
             # Receive the actions for each agent at this timestep in a batch of size 1
 
-            # build search tree
-            if use_search:
-                actions, return_, r = self.model.mcts(self.batch, self.t_env, self.t)
-                expected_mcts_return += r
+            # model based search
+            if use_search and H is None:
+                H, R = self.model.mcts(self.batch, self.t_env, self.t)
+
+            if H is not None:
+                try:
+                    H_actions = H[h_index]
+                    reward, terminated, env_info = self.env.step(H_actions)
+                except:
+                    # trajectory failed, rerun search from current state
+                    print(f"trajectory failed at t={self.t}, generating new trajectory")
+                    h_index = 0
+                    H, R = self.model.mcts(self.batch, self.t_env, self.t)
+                    H_actions = H[h_index]
+                    reward, terminated, env_info = self.env.step(H_actions)
+
+                actions = H_actions.unsqueeze(0)
+                expected_return += R[h_index]
+                h_index += 1
             else:
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
+                reward, terminated, env_info = self.env.step(actions[0])
 
-            reward, terminated, env_info = self.env.step(actions[0])
             episode_return += reward
 
             if use_search:
-                #print(f"t={self.t}: actions: {actions[0]} reward={reward:.2f}, expected reward={r:.2f}")
+                print(f"t={self.t}: actions: {actions[0]} reward={reward:.2f}, expected reward={R[h_index]:.2f}")
                 pass
 
             post_transition_data = {
@@ -134,7 +150,7 @@ class ModelMCTSEpisodeRunner:
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
 
-        return self.batch, episode_return, expected_mcts_return
+        return self.batch, episode_return, expected_return
 
     def _log(self, returns, stats, prefix):
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
