@@ -51,7 +51,7 @@ repeat_id: 1
 label: "default_label"
 
 # --- Model learner params ---
-model_learner: null
+model_learner:
 
 # --- Debugging params --- #
 save_episodes: False

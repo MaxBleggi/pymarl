@@ -120,7 +120,10 @@ def run_sequential(args, logger):
     model = le_REGISTRY[args.model_learner](mac, buffer.scheme, groups, logger, args) if args.model_learner else None
 
     # Give runner the scheme
-    runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac, model=model)
+    if args.model_learner:
+        runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac, model=model)
+    else:
+        runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
 
     if args.use_cuda:
         learner.cuda()
@@ -204,14 +207,17 @@ def run_sequential(args, logger):
         #print("Gathering real episode ...")
         t_op_start = time.time()
         # alternate between H and standard epsilon greedy
-        if model_trained:
+        if args.model_learner and model_trained:
             episode_batch, episode_return, expected_return = runner.run(use_search=True, test_mode=False)
             print(
                 f"MCTS: return {episode_return:.3f} expected_return: {expected_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
-            episode_batch, episode_return, _ = runner.run(use_search=False, test_mode=False)
-            print(
-                f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+            if args.model_learner:
+                episode_batch, episode_return, _ = runner.run(use_search=False, test_mode=False)
+                print(
+                    f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+            else:
+                episode_batch = runner.run(test_mode=False)
 
         buffer.insert_episode_batch(episode_batch)
 
@@ -233,14 +239,14 @@ def run_sequential(args, logger):
                 learner.train(episode_sample, runner.t_env, episode)
                 print(f"RL step: {time.time() - t_op_start: .2f} s")
 
-
-        if buffer.can_sample(args.model_min_samples) and buffer.can_sample(args.model_batch_size):
-            # train environment model
-            t_op_start = time.time()
-            model.train(buffer)
-            if not model_trained:
-                model_trained = True
-            print(f"Model training step: {time.time() - t_op_start: .2f} s")
+        if args.model_learner:
+            if buffer.can_sample(args.model_min_samples) and buffer.can_sample(args.model_batch_size):
+                # train environment model
+                t_op_start = time.time()
+                model.train(buffer)
+                if not model_trained:
+                    model_trained = True
+                print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
 
         # Execute test runs once in a while
