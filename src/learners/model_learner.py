@@ -6,6 +6,7 @@ from modules.models.representation import RepresentationModel
 from modules.models.dynamics import DynamicsModel
 from modules.models.actions import ActionsModel
 from modules.models.policy import PolicyModel
+from modules.models.rewards import RewardModel
 
 import numpy as np
 import random
@@ -37,7 +38,7 @@ class ModelLearner:
 
         # dynamics model
         dynamics_model_input_size = self.actions_size
-        self.dynamics_model_output_size = self.reward_size + self.term_size
+        self.dynamics_model_output_size = self.term_size
         self.dynamics_model = DynamicsModel(dynamics_model_input_size, self.dynamics_model_output_size,
                                        args.dynamics_model_hidden_dim)
 
@@ -52,6 +53,11 @@ class ModelLearner:
         actions_model_output_size = self.actions_size
         self.actions_model = ActionsModel(actions_model_input_size, actions_model_output_size, args.actions_model_hidden_dim)
 
+        # reward model
+        reward_model_input_size = args.dynamics_model_hidden_dim + self.actions_size
+        reward_model_output_size = self.reward_size
+        self.reward_model = RewardModel(reward_model_input_size, reward_model_output_size, args.reward_model_hidden_dim)
+
         # policy model
         policy_model_input_size = args.dynamics_model_hidden_dim
         policy_model_output_size = self.actions_size
@@ -59,7 +65,8 @@ class ModelLearner:
 
         # optimizer
         self.params = list(self.dynamics_model.parameters()) + list(self.representation_model.parameters()) \
-                      + list(self.actions_model.parameters()) + list(self.policy_model.parameters())
+                      + list(self.actions_model.parameters()) + list(self.policy_model.parameters()) \
+                      + list(self.reward_model.parameters())
         self.optimizer = torch.optim.Adam(self.params, lr=self.args.model_learning_rate)
 
         # logging stats
@@ -154,22 +161,21 @@ class ModelLearner:
         # inputs
         s = state[:, :-1, :]  # state at time t
         a = actions[:, :-1, :]  # joint action at time t
-        av = aa[:, 1:, :]  # available actions at t
-        pt = policy[:, 1:, :] # raw policy outputs at t
+        av = aa[:, :-1, :]  # available actions at t
+        pt = policy[:, :-1, :] # raw policy outputs at t
 
         # outputs
         r = reward[:, :-1, :]  # reward at time t+1
         T = term_signal[:, :-1, :]  # terminated at t+1
-        nav = aa[:, 1:, :] # available actions at t+1
 
-        y = torch.cat((r, T, nav, pt), dim=-1)
+        y = torch.cat((r, T, av, pt), dim=-1)
         return s, a, y
 
     def run_model(self, state, actions, ht_ct=None):
 
         bs, steps, n_actions = actions.size()
         ht, ct = ht_ct if ht_ct else self.dynamics_model.init_hidden(bs, self.device)
-        output_size = self.dynamics_model_output_size + 2 * self.actions_size
+        output_size = self.term_size + self.reward_size + 2 * self.actions_size # policy_outs == actions_size
         yp = torch.zeros(bs, steps, output_size).to(self.device)
 
         for t in range(0, steps):
@@ -180,11 +186,12 @@ class ModelLearner:
 
             at = actions[:, t, :]
             pt = self.policy_model(ht)
+            rt = self.reward_model(ht, at)
+            avt = self.actions_model(ht)
 
             # step forward
-            yt, (ht, ct) = self.dynamics_model(at, (ht, ct))
-            avt = self.actions_model(ht)
-            yp[:, t, :] = torch.cat((yt, avt, pt), dim=-1)
+            Tt, (ht, ct) = self.dynamics_model(at, (ht, ct))
+            yp[:, t, :] = torch.cat((rt, Tt, avt, pt), dim=-1)
 
         return yp, (ht, ct)
 
@@ -195,6 +202,7 @@ class ModelLearner:
         self.dynamics_model.eval()
         self.actions_model.eval()
         self.policy_model.eval()
+        self.reward_model.eval()
 
         with torch.no_grad():
             state, actions, y = self.get_model_input_output(*vars)
@@ -350,16 +358,18 @@ class ModelLearner:
                 # update action history
                 H[:, t, ...] = actions
 
-                # generate next state, reward, termination signal
-                rT, (ht, ct) = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
-                reward = rT[:, 0]
-                term_signal = rT[:, 1]
+                # generate reward
+                reward = self.reward_model(ht, actions_onehot.view(batch_size, -1).float())
+
+                # generate next state, termination signal
+                Tt, (ht, ct) = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
+                term_signal = Tt
 
                 # clamp reward
                 reward[reward < 0] = 0
 
                 # add reward to episode returns
-                G[:, 0] += reward
+                G += reward
                 # generate termination mask
                 threshold = self.args.model_term_threshold
                 terminated = (term_signal > threshold)
@@ -413,6 +423,8 @@ class ModelLearner:
             self.actions_model.cuda()
         if self.policy_model:
             self.policy_model.cuda()
+        if self.reward_model:
+            self.reward_model.cuda()
 
     def log_stats(self, t_env):
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
