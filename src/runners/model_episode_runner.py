@@ -63,7 +63,6 @@ class ModelEpisodeRunner:
 
             # Pass the entire batch of experiences up till now to the agents
             # Receive the actions for each agent at this timestep in a batch of size 1
-            actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
             if H is not None:
                 try:
                     H_actions = H[self.t]
@@ -71,10 +70,12 @@ class ModelEpisodeRunner:
                     actions = H_actions.unsqueeze(0)
                 except:
                     # fallback to policy
-                    #H = None
-                    #print(f"Model actions failed at {self.t}")
+                    H = None
+                    print(f"Model actions failed at timestep {self.t}")
+                    actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                     reward, terminated, env_info = self.env.step(actions[0])
             else:
+                actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                 reward, terminated, env_info = self.env.step(actions[0])
 
             episode_return += reward
