@@ -29,6 +29,8 @@ dynamics_model_hidden_dim: 256
 representation_model_hidden_dim: 256
 actions_model_hidden_dim: 256
 policy_model_hidden_dim: 256
+reward_model_hidden_dim: 256
+term_model_hidden_dim: 256
 
 # model learning params
 model_min_samples: 32
@@ -39,7 +41,6 @@ model_batch_size: 32
 model_intitial_epochs: 1
 model_epochs: 1 # per RL step
 model_log_epochs: 10
-model_rolling_starts: True
 model_timesteps:  # default is to use all available timesteps
 
 # rollouts

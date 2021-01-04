@@ -27,6 +27,8 @@ class ModelMCTSEpisodeRunner:
         # Log the first run
         self.log_train_stats_t = -1000000
 
+        self.avg_rollouts = 0
+
     def setup(self, scheme, groups, preprocess, mac, model=None):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
                                  preprocess=preprocess, device=self.args.device)
@@ -61,6 +63,9 @@ class ModelMCTSEpisodeRunner:
             print(f"Generating {self.args.model_rollout_batch_size} rollouts of depth {self.args.model_rollout_timesteps} with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
             t_op_start = time.time()
 
+        #max_rerolls = max(1, int(np.sqrt(self.avg_rollouts)))
+        max_rerolls = 5
+        rerolls = 0
         while not terminated:
 
             avail_actions = self.env.get_avail_actions()
@@ -78,19 +83,25 @@ class ModelMCTSEpisodeRunner:
             # model based search
             if use_search and H is None:
                 H, R = self.model.mcts(self.batch, self.t_env, self.t)
+                valid_actions = 0
 
-            if H is not None:
+            if H is not None and rerolls < max_rerolls:
                 try:
                     H_actions = H[h_index]
                     reward, terminated, env_info = self.env.step(H_actions)
                 except:
                     # trajectory failed, rerun search from current state
-                    print(f"trajectory failed at t={self.t}, generating new trajectory")
+                    print(f"trajectory failed at t={self.t}, generating new trajectory, rerolls={rerolls+1}/{max_rerolls}")
                     h_index = 0
                     H, R = self.model.mcts(self.batch, self.t_env, self.t)
+                    valid_actions = 0
+                    rerolls += 1
                     H_actions = H[h_index]
                     reward, terminated, env_info = self.env.step(H_actions)
 
+                #valid_actions += 1
+                #self.avg_rollouts += 0.1 * (valid_actions - self.avg_rollouts)
+                #print(self.avg_rollouts)
                 actions = H_actions.unsqueeze(0)
                 expected_return += R[h_index]
                 print(

@@ -8,20 +8,15 @@ class DynamicsModel(nn.Module):
     by the Representation model
     """
 
-    def __init__(self, input_size, output_size, hidden_size):
+    def __init__(self, input_size, hidden_size):
         super().__init__()
         self.hidden_size = hidden_size
-
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.rnn = nn.LSTMCell(hidden_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, output_size)
+        self.rnn = nn.LSTMCell(input_size, hidden_size)
 
     def forward(self, at, ht_ct):
-        xt = F.relu(self.fc1(at))
-        ht, ct = self.rnn(xt, ht_ct)
-        yt = self.fc2(ht)
+        ht, ct = self.rnn(at, ht_ct)
 
-        return yt, (ht, ct)
+        return ht, ct
 
     def init_hidden(self, batch_size, device):
         ht = torch.zeros(batch_size, self.hidden_size).to(device)

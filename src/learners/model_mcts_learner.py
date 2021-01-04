@@ -7,6 +7,8 @@ from modules.models.representation import RepresentationModel
 from modules.models.dynamics import DynamicsModel
 from modules.models.actions import ActionsModel
 from modules.models.policy import PolicyModel
+from modules.models.reward import RewardModel
+from modules.models.term import TermModel
 
 import numpy as np
 import random
@@ -85,9 +87,8 @@ class ModelMCTSLearner:
 
         # dynamics model
         dynamics_model_input_size = self.actions_size
-        self.dynamics_model_output_size = self.reward_size + self.term_size
-        self.dynamics_model = DynamicsModel(dynamics_model_input_size, self.dynamics_model_output_size,
-                                       args.dynamics_model_hidden_dim)
+        #self.dynamics_model_output_size = self.reward_size + self.term_size
+        self.dynamics_model = DynamicsModel(dynamics_model_input_size, args.dynamics_model_hidden_dim)
 
         # representation model
         representation_model_input_size = self.state_size
@@ -105,9 +106,20 @@ class ModelMCTSLearner:
         policy_model_output_size = self.actions_size
         self.policy_model = PolicyModel(policy_model_input_size, policy_model_output_size, args.policy_model_hidden_dim)
 
+        # reward model
+        reward_model_input_size = args.dynamics_model_hidden_dim
+        reward_model_output_size = self.reward_size
+        self.reward_model = RewardModel(reward_model_input_size, reward_model_output_size, args.reward_model_hidden_dim)
+
+        # term model
+        term_model_input_size = args.dynamics_model_hidden_dim
+        term_model_output_size = self.term_size
+        self.term_model = TermModel(term_model_input_size, term_model_output_size, args.term_model_hidden_dim)
+
         # optimizer
         self.params = list(self.dynamics_model.parameters()) + list(self.representation_model.parameters()) \
-                      + list(self.actions_model.parameters()) + list(self.policy_model.parameters())
+                    + list(self.actions_model.parameters()) + list(self.policy_model.parameters()) \
+                    + list(self.reward_model.parameters()) + list(self.term_model.parameters())
         self.optimizer = torch.optim.Adam(self.params, lr=self.args.model_learning_rate)
 
         # logging stats
@@ -123,7 +135,6 @@ class ModelMCTSLearner:
         self.epochs = 0
         self.save_index = 0
 
-        self.rolling_starts = self.args.model_rolling_starts
         self.model_trained = False
 
         # debugging
@@ -193,15 +204,14 @@ class ModelMCTSLearner:
         # inputs
         s = state[:, :-1, :]  # state at time t
         a = actions[:, :-1, :]  # joint action at time t
-        av = aa[:, 1:, :]  # available actions at t
-        pt = policy[:, 1:, :] # raw policy outputs at t
+        av = aa[:, :-1, :]  # available actions at t
+        pt = policy[:, :-1, :] # raw policy outputs at t
 
         # outputs
         r = reward[:, :-1, :]  # reward at time t+1
         T = term_signal[:, :-1, :]  # terminated at t+1
-        nav = aa[:, 1:, :] # available actions at t+1
 
-        y = torch.cat((r, T, nav, pt), dim=-1)
+        y = torch.cat((r, T, av, pt), dim=-1)
 
         if start_t == "random":
             start = int(random.random() * (s.size()[1] - 1))
@@ -224,22 +234,24 @@ class ModelMCTSLearner:
 
         bs, steps, n_actions = actions.size()
         ht, ct = ht_ct if ht_ct else self.dynamics_model.init_hidden(bs, self.device)
-        output_size = self.dynamics_model_output_size + 2 * self.actions_size
+        output_size = self.reward_size + self.term_size + 2 * self.actions_size
         yp = torch.zeros(bs, steps, output_size).to(self.device)
 
         for t in range(0, steps):
 
             if t == 0:
-                st = state[:, t, :]
-                ht = self.representation_model(st)
+                ht = self.representation_model(state[:, t, :])
 
             at = actions[:, t, :]
+            avt = self.actions_model(ht)
             pt = self.policy_model(ht)
 
             # step forward
-            yt, (ht, ct) = self.dynamics_model(at, (ht, ct))
-            avt = self.actions_model(ht)
-            yp[:, t, :] = torch.cat((yt, avt, pt), dim=-1)
+            ht, ct = self.dynamics_model(at, (ht, ct))
+            rt = self.reward_model(ht)
+            Tt = self.term_model(ht)
+
+            yp[:, t, :] = torch.cat((rt, Tt, avt, pt), dim=-1)
 
         return yp, (ht, ct)
 
@@ -250,9 +262,11 @@ class ModelMCTSLearner:
         self.dynamics_model.eval()
         self.actions_model.eval()
         self.policy_model.eval()
+        self.reward_model.eval()
+        self.term_model.eval()
 
         with torch.no_grad():
-            state, actions, y = self.get_model_input_output(*vars, start_t=0, max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t="random", max_t=self.args.model_timesteps)
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
@@ -289,7 +303,7 @@ class ModelMCTSLearner:
         print(f" -- policy: train {self.train_p_loss:.5f} val {self.val_p_loss:.5f}")
         print(f" -- return: train {self.train_return_loss:.5f} val {self.val_return_loss:.5f}")
 
-    def _train_rolling(self, vars, max_t):
+    def _train(self, vars, max_t):
         # learning a termination signal is easier with unmasked input
 
         self.representation_model.train()
@@ -298,50 +312,26 @@ class ModelMCTSLearner:
         self.policy_model.train()
 
         rollout_timesteps = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else 0
-        for e in range(self.args.model_epochs if self.model_trained else self.args.model_intitial_epochs):
 
-            timesteps = list(range(max_t.item() - rollout_timesteps - 2))
-            random.shuffle(timesteps)
-            for t in timesteps:
+        timesteps = list(range(max_t.item() - rollout_timesteps - 2))
+        random.shuffle(timesteps)
 
-                # get data
-                state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_timesteps)
-                #print(t, max_t.item(), rollout_timesteps, t + rollout_timesteps, state.size())
+        n = 1
+        nt = max_t.item() - rollout_timesteps - 2
+        timesteps = [0] + np.random.choice(np.arange(1, nt), n).tolist()
 
-                # make predictions
-                yp, _ = self.run_model(state, actions)
+        self.train_loss = np.zeros(n + 1)
+        self.train_r_loss = np.zeros(n + 1)
+        self.train_T_loss = np.zeros(n + 1)
+        self.train_aa_loss = np.zeros(n + 1)
+        self.train_p_loss = np.zeros(n + 1)
+        self.train_return_loss = np.zeros(n + 1)
 
-                # gradient descent
-                self.optimizer.zero_grad()
-                loss_vector = F.mse_loss(yp, y, reduction='none')
-                loss = loss_vector.mean()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
-                self.optimizer.step()
-
-                # record losses
-                self.train_loss = loss.item()
-                self.train_r_loss = loss_vector[:, :, 0].mean()
-                self.train_T_loss = loss_vector[:, :, 1].mean()
-                self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
-                self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
-                self.train_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
-
-                # if not self.model_trained:
-                print(f"epoch: {e+1} losses: train: {self.train_loss:.4f}, reward: {self.train_r_loss:.4f} term: {self.train_T_loss:.4f} aa: {self.train_aa_loss:.4f} pi: {self.train_p_loss:.4f} return: {self.train_return_loss:.4f}")
-
-    def _train(self, vars):
-        # learning a termination signal is easier with unmasked input
-
-        self.representation_model.train()
-        self.dynamics_model.train()
-        self.actions_model.train()
-        self.policy_model.train()
-
-        for e in range(self.args.model_epochs if self.model_trained else self.args.model_intitial_epochs):
+        for i, t in enumerate(timesteps):
 
             # get data
-            state, actions, y = self.get_model_input_output(*vars, start_t=0, max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_timesteps)
+            #print(t, max_t.item(), rollout_timesteps, t + rollout_timesteps, state.size())
 
             # make predictions
             yp, _ = self.run_model(state, actions)
@@ -355,15 +345,20 @@ class ModelMCTSLearner:
             self.optimizer.step()
 
             # record losses
-            self.train_loss = loss.item()
-            self.train_r_loss = loss_vector[:, :, 0].mean()
-            self.train_T_loss = loss_vector[:, :, 1].mean()
-            self.train_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
-            self.train_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
-            self.train_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
+            self.train_loss[i] = loss.item()
+            self.train_r_loss[i] = loss_vector[:, :, 0].mean()
+            self.train_T_loss[i] = loss_vector[:, :, 1].mean()
+            self.train_aa_loss[i] = loss_vector[:, :, 2:self.actions_size].mean()
+            self.train_p_loss[i] = loss_vector[:, :, 2 + self.actions_size:].mean()
+            self.train_return_loss[i] = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
 
-            #if not self.model_trained:
-            print(f"epoch: {e+1} losses: train: {self.train_loss:.4f}, reward: {self.train_r_loss:.4f} term: {self.train_T_loss:.4f} aa: {self.train_aa_loss:.4f} pi: {self.train_p_loss:.4f} return: {self.train_return_loss:.4f}")
+        self.train_loss = self.train_loss.mean()
+        self.train_r_loss = self.train_r_loss.mean()
+        self.train_T_loss = self.train_T_loss.mean()
+        self.train_aa_loss = self.train_aa_loss.mean()
+        self.train_p_loss = self.train_p_loss.mean()
+        self.train_return_loss = self.train_return_loss.mean()
+
 
     def train(self, buffer):
 
@@ -378,10 +373,8 @@ class ModelMCTSLearner:
             batch.to(self.args.device)
 
         vars = self.get_episode_vars(batch)
-        if self.rolling_starts:
-            self._train_rolling(vars, max_ep_t)
-        else:
-            self._train(vars)
+        self._train(vars, max_ep_t)
+
         if not self.model_trained:
             self.model_trained = True
 
@@ -533,6 +526,8 @@ class ModelMCTSLearner:
         self.dynamics_model.eval()
         self.actions_model.eval()
         self.policy_model.eval()
+        self.reward_model.eval()
+        self.term_model.eval()
 
         with torch.no_grad():
 
@@ -585,15 +580,15 @@ class ModelMCTSLearner:
                 H[:, t, ...] = actions
 
                 # generate next state, reward, termination signal
-                rT, (ht, ct) = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
-                reward = rT[:, 0]
-                term_signal = rT[:, 1]
+                ht, ct = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
+                reward = self.reward_model(ht)
+                term_signal = self.term_model(ht)
 
                 # clamp reward
                 reward[reward < 0] = 0
 
                 # record timestep reward
-                R[:, t, :] = reward.unsqueeze(dim=-1)
+                R[:, t, :] = reward
 
                 # generate termination mask
                 terminated = (term_signal > self.args.model_term_threshold)
@@ -636,6 +631,10 @@ class ModelMCTSLearner:
             self.actions_model.cuda()
         if self.policy_model:
             self.policy_model.cuda()
+        if self.reward_model:
+            self.reward_model.cuda()
+        if self.term_model:
+            self.term_model.cuda()
 
     def log_stats(self, t_env):
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
