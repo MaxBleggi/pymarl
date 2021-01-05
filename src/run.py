@@ -244,7 +244,7 @@ def run_sequential(args, logger):
             # select model generated episode
             G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]
             G_ranked.sort(key=lambda x: x[1], reverse=True)
-            print(G_ranked)
+            #print(G_ranked)
             H_index = 0
             H = H[G_ranked[H_index][0]]  # take the best candidate
             G = G_ranked[H_index][1] # expected return for this candidate
