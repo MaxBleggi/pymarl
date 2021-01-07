@@ -208,9 +208,9 @@ def run_sequential(args, logger):
         t_op_start = time.time()
         # alternate between H and standard epsilon greedy
         if args.model_learner and model_trained:
-            episode_batch, episode_return, expected_return = runner.run(use_search=True, test_mode=False)
+            episode_batch, episode_return, partial_returns = runner.run(use_search=args.model_use_search, test_mode=False)
             print(
-                f"MCTS: return {episode_return:.3f} expected_return: {expected_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"SEARCH: return {episode_return:.3f} partial_returns: (true: {partial_returns[0]:.3f}, expected: {partial_returns[1]:.3f}) epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
             if args.model_learner:
                 episode_batch, episode_return, _ = runner.run(use_search=False, test_mode=False)
@@ -244,6 +244,7 @@ def run_sequential(args, logger):
                 # train environment model
                 t_op_start = time.time()
                 model.train(buffer)
+                model.log_stats(runner.t_env)
                 if not model_trained:
                     model_trained = True
                 print(f"Model training step: {time.time() - t_op_start: .2f} s")

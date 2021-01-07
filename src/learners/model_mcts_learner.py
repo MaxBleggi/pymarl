@@ -413,17 +413,17 @@ class ModelMCTSLearner:
         k = self.args.model_rollout_timesteps
 
         # apply discounting and sum over episode
-        coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
-        rewards = torch.mul(rewards.squeeze(), coeff)
+        if self.args.model_use_discounting:
+            coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
+            rewards = torch.mul(rewards.squeeze(), coeff)
         G = rewards.sum(dim=1)
-        print(f"t={t_start} Returns")
-        print(np.histogram(G.flatten().to("cpu")))
+        #print(f"t={t_start} Returns")
+        #print(np.histogram(G.flatten().to("cpu")))
 
         # add action value estimates for non-terminal episodes
         if len(active_episodes) > 0:
             t_end = mask.min(dim=1)[1].flatten()
             G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0].unsqueeze(dim=1)
-
 
         # rank and select action history H by discounted return G
         G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]

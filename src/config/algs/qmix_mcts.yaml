@@ -48,6 +48,9 @@ model_rollout_timesteps: # default to max scenario timesteps
 model_rollout_batch_size: 256
 model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold
+model_max_rerolls: 1 # number of times to resume search on failure
+model_use_search: True
+model_use_discounting: True
 
 # action selection
 model_mac: "model_mac"
@@ -61,4 +64,4 @@ model_epsilon_delay: 0
 model_save_val_data: False
 #episode_dir: "/home/ubuntu/masters/experiments/model-learning/1/val_data"
 
-name: "qmix-mcts"
+name: "qmix-rts-k-max-retries"
