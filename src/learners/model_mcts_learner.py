@@ -129,6 +129,7 @@ class ModelMCTSLearner:
         self.train_aa_loss, self.val_aa_loss = 0, 0
         self.train_p_loss, self.val_p_loss = 0, 0
         self.train_return_loss, self.val_return_loss = 0, 0
+        self.model_grad_norm = 0
 
         self.log_stats_t = -self.args.learner_log_interval - 1
 
@@ -270,12 +271,12 @@ class ModelMCTSLearner:
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
-            self.val_loss = loss_vector.mean()
-            self.val_r_loss = loss_vector[:, :, 0].mean()
-            self.val_T_loss = loss_vector[:, :, 1].mean()
-            self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean()
-            self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean()
-            self.val_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
+            self.val_loss = loss_vector.mean().cpu().numpy()
+            self.val_r_loss = loss_vector[:, :, 0].mean().cpu().numpy()
+            self.val_T_loss = loss_vector[:, :, 1].mean().cpu().numpy()
+            self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean().cpu().numpy()
+            self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean().cpu().numpy()
+            self.val_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1)).cpu().numpy()
 
             if self.args.model_save_val_data:
                 # save input_outputs
@@ -341,7 +342,7 @@ class ModelMCTSLearner:
             loss_vector = F.mse_loss(yp, y, reduction='none')
             loss = loss_vector.mean()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
+            self.model_grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
             self.optimizer.step()
 
             # record losses
@@ -640,6 +641,7 @@ class ModelMCTSLearner:
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             self.logger.log_stat("model_train_loss", self.train_loss, t_env)
             self.logger.log_stat("model_val_loss", self.val_loss, t_env)
+            self.logger.log_stat("model_grad_norm", self.model_grad_norm, t_env)
 
             self.logger.log_stat("model_reward_train_loss", self.train_r_loss, t_env)
             self.logger.log_stat("model_term_train_loss", self.train_T_loss, t_env)

@@ -140,7 +140,7 @@ class ModelMCTSEpisodeRunner:
         }
         self.batch.update(last_data, ts=self.t)
 
-        if use_search:
+        if search_initialised:
             print(f"Search time: {time.time() - t_op_start:.2f} s")
             self.rollout_steps.append(rollout_steps)
 
