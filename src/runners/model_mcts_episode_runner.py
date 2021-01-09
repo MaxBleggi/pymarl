@@ -119,6 +119,9 @@ class ModelMCTSEpisodeRunner:
                 # search failed, fallback to standard action selection method
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                 reward, terminated, env_info = self.env.step(actions[0])
+                # print(
+                #     f"t={self.t}: actions: {actions[0]} reward={reward:.2f}")
+
 
             episode_return += reward
 
@@ -168,8 +171,9 @@ class ModelMCTSEpisodeRunner:
             if hasattr(self.mac.action_selector, "epsilon"):
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             # log rollout steps
-            self.logger.log_stat("valid_rollout_steps", np.array(self.rollout_steps).mean(), self.t_env)
-            self.rollout_steps = []
+            if len(self.rollout_steps) > 0:
+                self.logger.log_stat("valid_rollout_steps", np.array(self.rollout_steps).mean(), self.t_env)
+                self.rollout_steps = []
             self.log_train_stats_t = self.t_env
 
         return self.batch, episode_return, (partial_return, expected_partial_return)

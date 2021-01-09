@@ -50,7 +50,6 @@ model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold
 model_max_rerolls: 1 # number of times to resume search on failure
 model_use_search: True
-model_use_discounting: True
 
 # action selection
 model_mac: "model_mac"

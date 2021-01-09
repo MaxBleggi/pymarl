@@ -271,12 +271,12 @@ class ModelMCTSLearner:
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
-            self.val_loss = loss_vector.mean().cpu().numpy()
-            self.val_r_loss = loss_vector[:, :, 0].mean().cpu().numpy()
-            self.val_T_loss = loss_vector[:, :, 1].mean().cpu().numpy()
-            self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean().cpu().numpy()
-            self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean().cpu().numpy()
-            self.val_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1)).cpu().numpy()
+            self.val_loss = loss_vector.mean().cpu().numpy().item()
+            self.val_r_loss = loss_vector[:, :, 0].mean().cpu().numpy().item()
+            self.val_T_loss = loss_vector[:, :, 1].mean().cpu().numpy().item()
+            self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean().cpu().numpy().item()
+            self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean().cpu().numpy().item()
+            self.val_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1)).cpu().numpy().item()
 
             if self.args.model_save_val_data:
                 # save input_outputs
@@ -414,9 +414,8 @@ class ModelMCTSLearner:
         k = self.args.model_rollout_timesteps
 
         # apply discounting and sum over episode
-        if self.args.model_use_discounting:
-            coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
-            rewards = torch.mul(rewards.squeeze(), coeff)
+        coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
+        rewards = torch.mul(rewards.squeeze(), coeff)
         G = rewards.sum(dim=1)
         #print(f"t={t_start} Returns")
         #print(np.histogram(G.flatten().to("cpu")))
