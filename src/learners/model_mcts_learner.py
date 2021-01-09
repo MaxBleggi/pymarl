@@ -640,7 +640,7 @@ class ModelMCTSLearner:
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             self.logger.log_stat("model_train_loss", self.train_loss, t_env)
             self.logger.log_stat("model_val_loss", self.val_loss, t_env)
-            self.logger.log_stat("model_grad_norm", self.model_grad_norm, t_env)
+            self.logger.log_stat("model_grad_norm", self.model_grad_norm.cpu().numpy().item(), t_env)
 
             self.logger.log_stat("model_reward_train_loss", self.train_r_loss, t_env)
             self.logger.log_stat("model_term_train_loss", self.train_T_loss, t_env)
