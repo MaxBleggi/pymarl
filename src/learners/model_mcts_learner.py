@@ -317,7 +317,7 @@ class ModelMCTSLearner:
         timesteps = list(range(max_t.item() - rollout_timesteps - 2))
         random.shuffle(timesteps)
 
-        n = 1
+        n = self.args.model_rollout_timestep_samples
         nt = max_t.item() - rollout_timesteps - 2
         timesteps = [0] + np.random.choice(np.arange(1, nt), n).tolist()
 

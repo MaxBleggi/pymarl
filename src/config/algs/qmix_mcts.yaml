@@ -42,6 +42,7 @@ model_intitial_epochs: 1
 model_epochs: 1 # per RL step
 model_log_epochs: 10
 model_timesteps:  # default is to use all available timesteps
+model_rollout_timestep_samples: 10
 
 # rollouts
 model_rollout_timesteps: # default to max scenario timesteps
@@ -55,8 +56,8 @@ model_use_search: True
 model_mac: "model_mac"
 model_action_selector: "model_epsilon_greedy"
 model_epsilon_start: 1.0
-model_epsilon_finish: 0.5
-model_epsilon_anneal_time: 25000
+model_epsilon_finish: 0.05
+model_epsilon_anneal_time: 50000
 model_epsilon_delay: 0
 
 # debug
