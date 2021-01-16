@@ -28,6 +28,8 @@ class ModelMCTSEpisodeRunner:
         self.log_train_stats_t = -1000000
 
         self.rollout_steps = []
+        self.rollout_coverage = np.zeros((self.episode_limit,), dtype=np.int32)
+        self.p_rollout = 1/self.episode_limit
 
     def setup(self, scheme, groups, preprocess, mac, model=None):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -67,6 +69,7 @@ class ModelMCTSEpisodeRunner:
         #max_rerolls = max(1, int(np.sqrt(self.avg_rollouts)))
         rerolls = 0
         rollout_steps = 0
+        rollout_valid = False
         while not terminated:
 
             avail_actions = self.env.get_avail_actions()
@@ -78,12 +81,9 @@ class ModelMCTSEpisodeRunner:
 
             self.batch.update(pre_transition_data, ts=self.t)
 
-            # Pass the entire batch of experiences up till now to the agents
-            # Receive the actions for each agent at this timestep in a batch of size 1
-
-            if use_search:
+            if rollout_valid or (use_search and (self.rollout_coverage[self.t] == 0 or np.random.rand() < self.p_rollout)):
                 if not search_initialised:
-                    print(f"Generating trajectories, attempt {rerolls + 1}/{self.args.model_max_rerolls}")
+                    print(f"Generating trajectories from timestep {self.t}, rollout {rerolls + 1}/{self.args.model_max_rerolls}")
                     H, R = self.model.mcts(self.batch, self.t_env, self.t)
                     h_index = 0
                     search_initialised = True
@@ -91,21 +91,26 @@ class ModelMCTSEpisodeRunner:
 
                 try:
                     reward, terminated, env_info = self.env.step(H[h_index])
+                    self.rollout_coverage[self.t] += 1
+                    rollout_valid = True
                 except:
                     print(f"Trajectory failed at t={self.t}, h_index={h_index}")
                     # retry action with new trajectory if rerolls available
                     if rerolls < self.args.model_max_rerolls:
-                        print(f"Generating trajectories, attempt {rerolls + 1}/{self.args.model_max_rerolls}")
+                        print(f"Generating trajectories from timestep {self.t}, rollout {rerolls + 1}/{self.args.model_max_rerolls}")
                         H, R = self.model.mcts(self.batch, self.t_env, self.t)
                         h_index = 0
                         rerolls += 1
                         # select action, avail. actions is up to date so this will always succeed
                         reward, terminated, env_info = self.env.step(H[h_index])
+                        self.rollout_coverage[self.t] += 1
+                        rollout_valid = True
                     else:
                         # no more rerolls available, default to standard search procedure
                         use_search = False
+                        rollout_valid = False
 
-            if use_search:
+            if rollout_valid:
                 # search based action selection was successful
                 actions = H[h_index].unsqueeze(0)
                 partial_return += reward
@@ -115,8 +120,10 @@ class ModelMCTSEpisodeRunner:
                 rollout_steps += 1
                 h_index += 1
 
-            if not use_search:
+            if not rollout_valid:
                 # search failed, fallback to standard action selection method
+                # Pass the entire batch of experiences up till now to the agents
+                # Receive the actions for each agent at this timestep in a batch of size 1
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                 reward, terminated, env_info = self.env.step(actions[0])
                 # print(
