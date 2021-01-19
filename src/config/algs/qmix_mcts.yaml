@@ -25,12 +25,12 @@ hypernet_embed: 64
 # models
 runner: "model_mcts_episode"
 model_learner: "model_mcts"
-dynamics_model_hidden_dim: 256
-representation_model_hidden_dim: 256
-actions_model_hidden_dim: 256
-policy_model_hidden_dim: 256
-reward_model_hidden_dim: 256
-term_model_hidden_dim: 256
+dynamics_model_hidden_dim: 64
+representation_model_hidden_dim: 64
+actions_model_hidden_dim: 64
+policy_model_hidden_dim: 64
+reward_model_hidden_dim: 64
+term_model_hidden_dim: 64
 
 # model learning params
 model_min_samples: 32
