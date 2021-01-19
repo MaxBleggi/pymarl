@@ -49,7 +49,8 @@ model_rollout_timesteps: # default to max scenario timesteps
 model_rollout_batch_size: 256
 model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold
-model_max_rerolls: 1 # number of times to resume search on failure
+model_max_rerolls: 10 # number of times to resume search on failure
+model_max_recovery_rerolls: 0 # how many recovery rerolls to allow per episode, used extend failed trajectories
 model_use_search: True
 
 # action selection

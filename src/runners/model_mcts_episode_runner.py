@@ -68,6 +68,7 @@ class ModelMCTSEpisodeRunner:
 
         #max_rerolls = max(1, int(np.sqrt(self.avg_rollouts)))
         rerolls = 0
+        recovery_rerolls = 0
         rollout_steps = 0
         rollout_valid = False
         while not terminated:
@@ -96,19 +97,23 @@ class ModelMCTSEpisodeRunner:
                 except:
                     print(f"Trajectory failed at t={self.t}, h_index={h_index}")
                     # retry action with new trajectory if rerolls available
-                    if rerolls < self.args.model_max_rerolls:
-                        print(f"Generating trajectories from timestep {self.t}, rollout {rerolls + 1}/{self.args.model_max_rerolls}")
+                    if recovery_rerolls < self.args.model_max_recovery_rerolls:
+                        print(f"Generating trajectories from timestep {self.t}, recovery rollout {recovery_rerolls + 1}/{self.args.model_max_recovery_rerolls}")
                         H, R = self.model.mcts(self.batch, self.t_env, self.t)
                         h_index = 0
-                        rerolls += 1
+                        recovery_rerolls += 1
                         # select action, avail. actions is up to date so this will always succeed
                         reward, terminated, env_info = self.env.step(H[h_index])
                         self.rollout_coverage[self.t] += 1
                         rollout_valid = True
                     else:
-                        # no more rerolls available, default to standard search procedure
-                        use_search = False
+                        # recovery rollout failed, allow additional rerolls if available otherwise use standard search
                         rollout_valid = False
+                        search_initialised = False
+
+                        # no more rerolls available, default to standard search procedure
+                        use_search = rerolls <= self.args.model_max_rerolls
+
 
             if rollout_valid:
                 # search based action selection was successful
