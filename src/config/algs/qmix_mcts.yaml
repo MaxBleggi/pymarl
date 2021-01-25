@@ -58,7 +58,7 @@ model_mac: "model_mac"
 model_action_selector: "model_epsilon_greedy"
 model_epsilon_start: 1.0
 model_epsilon_finish: 0.05
-model_epsilon_anneal_time: 50000
+model_epsilon_anneal_time: 5000
 model_epsilon_delay: 0
 
 # debug

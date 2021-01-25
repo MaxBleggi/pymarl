@@ -11,10 +11,12 @@ class DynamicsModel(nn.Module):
     def __init__(self, input_size, hidden_size):
         super().__init__()
         self.hidden_size = hidden_size
-        self.rnn = nn.LSTMCell(input_size, hidden_size)
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.rnn = nn.LSTMCell(hidden_size, hidden_size)
 
     def forward(self, at, ht_ct):
-        ht, ct = self.rnn(at, ht_ct)
+        xt = F.relu(self.fc1(at))
+        ht, ct = self.rnn(xt, ht_ct)
 
         return ht, ct
 
