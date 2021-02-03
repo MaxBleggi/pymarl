@@ -199,25 +199,21 @@ def run_sequential(args, logger):
 
     # model based vars
     model_trained = False
-    tree = None
 
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
     while runner.t_env <= args.t_max:
 
-        #print("Gathering real episode ...")
         t_op_start = time.time()
-        # alternate between H and standard epsilon greedy
-        if args.model_learner and model_trained:
-            episode_batch, episode_return, partial_returns = runner.run(use_search=args.model_use_search, test_mode=False)
+
+        # if model is available use
+        if args.model_learner and model.trained:
+            episode_batch, episode_return = runner.run(use_search=args.model_use_search, test_mode=False)
             print(
-                f"SEARCH: return {episode_return:.3f} partial_returns: (true: {partial_returns[0]:.3f}, expected: {partial_returns[1]:.3f}) epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"SEARCH: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
-            if args.model_learner:
-                episode_batch, episode_return, _ = runner.run(use_search=False, test_mode=False)
-                print(
-                    f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
-            else:
-                episode_batch = runner.run(test_mode=False)
+            episode_batch, episode_return = runner.run(use_search=False, test_mode=False)
+            print(
+                f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
         buffer.insert_episode_batch(episode_batch)
 
