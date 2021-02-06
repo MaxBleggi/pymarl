@@ -1,3 +1,14 @@
+#TODO
+#  - representation function needs to take a history of previous real states
+#  - softmax temperature
+#  - minmax stats
+#  - mask out invalid actions from ucb ranking
+#  - expand leaf nodes in parallel
+#  - add l2 loss
+#  - gradient tricks (see appendix G)
+#  - prioritised replay
+#  - can probably skip avail_actions model and rely on policy outputs to make invalid actions unlikely
+
 import time
 import torch
 import torch.nn.functional as F
@@ -19,6 +30,7 @@ import pickle
 from glob import glob
 import queue
 from controllers import REGISTRY as mac_REGISTRY
+from .muzero_tree import *
 
 class ModelMuZeroLearner:
     def __init__(self, mac, scheme, groups, logger, args):
@@ -35,9 +47,11 @@ class ModelMuZeroLearner:
 
         # input/output dimensions
         self.actions_size = args.n_actions * args.n_agents
+        self.action_space = (self.args.n_agents, self.args.n_actions)
         self.state_size = args.state_shape - self.actions_size if args.env_args["state_last_action"] else args.state_shape
         self.reward_size = scheme["reward"]["vshape"][0]
         self.term_size = scheme["terminated"]["vshape"][0]
+        self.value_size = 1
 
         # dynamics model
         dynamics_model_input_size = self.actions_size
@@ -71,12 +85,16 @@ class ModelMuZeroLearner:
         self.term_model = TermModel(term_model_input_size, term_model_output_size, args.term_model_hidden_dim)
 
         # value model
-        # TODO
+        value_model_input_size = args.value_model_hidden_dim
+        value_model_output_size = self.value_size
+        self.value_model = ValueModel(value_model_input_size, value_model_output_size, args.value_model_hidden_dim)
 
         # optimizer
         self.params = list(self.dynamics_model.parameters()) + list(self.representation_model.parameters()) \
                     + list(self.actions_model.parameters()) + list(self.policy_model.parameters()) \
-                    + list(self.reward_model.parameters()) + list(self.term_model.parameters())
+                    + list(self.reward_model.parameters()) + list(self.term_model.parameters()) \
+                    + list(self.value_model.parameters())
+        
         self.optimizer = torch.optim.Adam(self.params, lr=self.args.model_learning_rate)
 
         # logging stats
@@ -85,7 +103,7 @@ class ModelMuZeroLearner:
         self.train_T_loss, self.val_T_loss = 0, 0
         self.train_aa_loss, self.val_aa_loss = 0, 0
         self.train_p_loss, self.val_p_loss = 0, 0
-        self.train_return_loss, self.val_return_loss = 0, 0
+        self.train_v_loss, self.val_v_loss = 0, 0
         self.model_grad_norm = 0
 
         self.log_stats_t = -self.args.learner_log_interval - 1
@@ -131,6 +149,15 @@ class ModelMuZeroLearner:
 
         # reward
         reward = batch["reward"][:, :-1, :]
+        
+        # value ie. n-step return
+        value = torch.zeros_like(reward)
+        n = self.args.model_bootstrap_timesteps
+        coeff = torch.pow(self.args.gamma, torch.arange(0, n).float()).expand(nbatch, n).unsqueeze(-1).to(value.device)
+        for i in range(0, ntimesteps):                
+            r = reward[:, i + 1:i + n + 1]
+            c = coeff[:, :r.size()[1]]        
+            value[:, i] = torch.mul(r, c).sum(dim=1)         
 
         # termination signal
         terminated = batch["terminated"][:, :-1].float()
@@ -154,22 +181,24 @@ class ModelMuZeroLearner:
         reward *= mask
         state *= mask
         policy *= mask
+        value *= mask
 
-        return state, action, reward, term_signal, obs, aa, policy, mask
+        return state, action, reward, term_signal, obs, aa, policy, value, mask
 
-    def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, mask, start_t=0, max_t=None):
+    def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, value, mask, start_t=0, max_t=None):
 
         # inputs
         s = state[:, :-1, :]  # state at time t
         a = actions[:, :-1, :]  # joint action at time t
         av = aa[:, :-1, :]  # available actions at t
-        pt = policy[:, :-1, :] # raw policy outputs at t
+        pt = policy[:, :-1, :] # raw policy outputs at t        
 
         # outputs
-        r = reward[:, :-1, :]  # reward at time t+1
+        r = reward[:, :-1, :]  # reward at time t+1        
         T = term_signal[:, :-1, :]  # terminated at t+1
+        vt = value[:, :-1, :]  # estimated discounted k-step return at t 
 
-        y = torch.cat((r, T, av, pt), dim=-1)
+        y = torch.cat((r, T, av, pt, vt), dim=-1)
 
         if start_t == "random":
             start = int(random.random() * (s.size()[1] - 1))
@@ -187,12 +216,11 @@ class ModelMuZeroLearner:
 
         return s, a, y
 
-
     def run_model(self, state, actions, ht_ct=None):
 
         bs, steps, n_actions = actions.size()
         ht, ct = ht_ct if ht_ct else self.dynamics_model.init_hidden(bs, self.device)
-        output_size = self.reward_size + self.term_size + 2 * self.actions_size
+        output_size = self.reward_size + self.term_size + 2 * self.actions_size + self.value_size
         yp = torch.zeros(bs, steps, output_size).to(self.device)
 
         for t in range(0, steps):
@@ -202,14 +230,15 @@ class ModelMuZeroLearner:
 
             at = actions[:, t, :]
             avt = self.actions_model(ht)
-            pt = self.policy_model(ht)
+            pt = self.policy_model(ht) # TODO this could probably use avt as additional input            
 
             # step forward
             ht, ct = self.dynamics_model(at, (ht, ct))
-            rt = self.reward_model(ht)
+            rt = self.reward_model(ht)            
             Tt = self.term_model(ht)
+            vt = self.value_model(ht)
 
-            yp[:, t, :] = torch.cat((rt, Tt, avt, pt), dim=-1)
+            yp[:, t, :] = torch.cat((rt, Tt, avt, pt, vt), dim=-1)
 
         return yp, (ht, ct)
 
@@ -222,18 +251,20 @@ class ModelMuZeroLearner:
         self.policy_model.eval()
         self.reward_model.eval()
         self.term_model.eval()
+        self.value_model.eval()
 
         with torch.no_grad():
-            state, actions, y = self.get_model_input_output(*vars, start_t="random", max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t="random", max_t=self.args.model_rollout_timesteps)
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
+            idx = 0
             self.val_loss = loss_vector.mean().cpu().numpy().item()
-            self.val_r_loss = loss_vector[:, :, 0].mean().cpu().numpy().item()
-            self.val_T_loss = loss_vector[:, :, 1].mean().cpu().numpy().item()
-            self.val_aa_loss = loss_vector[:, :, 2:self.actions_size].mean().cpu().numpy().item()
-            self.val_p_loss = loss_vector[:, :, 2 + self.actions_size:].mean().cpu().numpy().item()
-            self.val_return_loss = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1)).cpu().numpy().item()
+            self.val_r_loss = loss_vector[:, :, idx:idx + self.reward_size].mean().cpu().numpy().item(); idx += self.reward_size
+            self.val_T_loss = loss_vector[:, :, idx:idx + self.term_size].mean().cpu().numpy().item(); idx += self.term_size
+            self.val_aa_loss = loss_vector[:, :, idx:idx + self.actions_size].mean().cpu().numpy().item(); idx += self.actions_size
+            self.val_p_loss = loss_vector[:, :, idx:idx + self.actions_size].mean().cpu().numpy().item(); idx += self.actions_size
+            self.val_v_loss = loss_vector[:, :, idx:idx + self.value_size].mean().cpu().numpy().item(); idx += self.value_size
 
             if self.args.model_save_val_data:
                 # save input_outputs
@@ -259,7 +290,7 @@ class ModelMuZeroLearner:
         print(f" -- term: train {self.train_T_loss:.5f} val {self.val_T_loss:.5f}")
         print(f" -- avail_actions: train {self.train_aa_loss:.5f} val {self.val_aa_loss:.5f}")
         print(f" -- policy: train {self.train_p_loss:.5f} val {self.val_p_loss:.5f}")
-        print(f" -- return: train {self.train_return_loss:.5f} val {self.val_return_loss:.5f}")
+        print(f" -- value: train {self.train_v_loss:.5f} val {self.val_v_loss:.5f}")
 
     def _train(self, vars, max_t):
         # learning a termination signal is easier with unmasked input
@@ -268,6 +299,8 @@ class ModelMuZeroLearner:
         self.dynamics_model.train()
         self.actions_model.train()
         self.policy_model.train()
+        self.term_model.train()
+        self.value_model.train()
 
         rollout_timesteps = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else 0
 
@@ -283,12 +316,12 @@ class ModelMuZeroLearner:
         self.train_T_loss = np.zeros(n + 1)
         self.train_aa_loss = np.zeros(n + 1)
         self.train_p_loss = np.zeros(n + 1)
-        self.train_return_loss = np.zeros(n + 1)
+        self.train_v_loss = np.zeros(n + 1)
 
         for i, t in enumerate(timesteps):
 
             # get data
-            state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_rollout_timesteps)
             #print(t, max_t.item(), rollout_timesteps, t + rollout_timesteps, state.size())
 
             # make predictions
@@ -303,20 +336,20 @@ class ModelMuZeroLearner:
             self.optimizer.step()
 
             # record losses
+            idx = 0
             self.train_loss[i] = loss.item()
-            self.train_r_loss[i] = loss_vector[:, :, 0].mean()
-            self.train_T_loss[i] = loss_vector[:, :, 1].mean()
-            self.train_aa_loss[i] = loss_vector[:, :, 2:self.actions_size].mean()
-            self.train_p_loss[i] = loss_vector[:, :, 2 + self.actions_size:].mean()
-            self.train_return_loss[i] = F.mse_loss(yp[:, :, 0].sum(dim=1), y[:, :, 0].sum(dim=1))
+            self.train_r_loss[i] = loss_vector[:, :, idx:idx + self.reward_size].mean(); idx += self.reward_size
+            self.train_T_loss[i] = loss_vector[:, :, idx:idx + self.term_size].mean(); idx += self.term_size
+            self.train_aa_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean(); idx += self.actions_size
+            self.train_p_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean(); idx += self.actions_size
+            self.train_v_loss[i] = loss_vector[:, :, idx:idx + self.value_size].mean(); idx += self.value_size
 
         self.train_loss = self.train_loss.mean()
         self.train_r_loss = self.train_r_loss.mean()
         self.train_T_loss = self.train_T_loss.mean()
         self.train_aa_loss = self.train_aa_loss.mean()
         self.train_p_loss = self.train_p_loss.mean()
-        self.train_return_loss = self.train_return_loss.mean()
-
+        self.train_v_loss = self.train_v_loss.mean()
 
     def train(self, buffer):
 
@@ -354,186 +387,202 @@ class ModelMuZeroLearner:
 
             self.epochs = 0
 
-    def list_to_hash(self, l):
-        return "-".join([str(x) for x in l])
+    def select_child(self, parent):
+        """
+        use tree policy to select a child
+        """
+        children = list(parent.children.keys())
+        child = random.choice(children)
+        return parent.children[child]
 
-    def hash_to_list(self, h):
-        return [int(x) for x in h.split('-')]
+    def select_action(self, parent):
+        """
+        UCB action selection
+        """
+        c1 = self.args.model_mcts_c1
+        c2 = self.args.model_mcts_c2
+        scores = np.zeros((parent.n_agents, parent.n_actions))
 
-    def mcts(self, batch, t_env, t_start=0):
-        # generate action history reward and valid timestep mask across batch
-        t_op_start = time.time()
-        q_values, actions, rewards, mask, active_episodes = self.generate_batch(batch, t_env, t_start)
-        #print(f"Generated trajectories: {time.time() - t_op_start: .3f} s")
+        for agent in range(parent.n_agents):
+            for action in range(parent.n_actions):
+                child = parent.edges[agent][action]
 
-        t_op_start = time.time()
-        nb, nt, _ = rewards.size()
-        k = self.args.model_rollout_timesteps
+                visit_ratio = np.sqrt(parent.count) / (1 + child.count)
+                c2_ratio = (parent.count + c2 + 1) / c2
 
-        # apply discounting and sum over episode
-        coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
-        rewards = torch.mul(rewards.squeeze(), coeff)
-        G = rewards.sum(dim=1)
-        #print(f"t={t_start} Returns")
-        #print(np.histogram(G.flatten().to("cpu")))
+                scores[agent][action] = child.value + child.prior * visit_ratio * (c1 + np.log(c2_ratio))
 
-        # add action value estimates for non-terminal episodes
-        if len(active_episodes) > 0:
-            t_end = mask.min(dim=1)[1].flatten()
-            G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0].unsqueeze(dim=1)
+        return np.argmax(scores, axis=1)
 
-        # rank and select action history H by discounted return G
-        G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]
-        G_ranked.sort(key=lambda x: x[1], reverse=True)
-        selected = G_ranked[0]
+    def expand_node(self, parent):
+        # select a joint action and add it to the set of children
+        action = self.select_action(parent)
+        action = action.repeat(self.args.model_rollout_batch_size, 1)
+        child = self.simulate(parent, action)
+        parent.add_child(tuple(action), child)
+        return action, child
 
-        H = actions[selected[0]]  # take the best candidate
-        #G = selected[1] # expected return for this candidate
-
-        return H, rewards[selected[0]]
-
-
-    def build_tree(self, batch, t_env, t_start=0):
-
-        # generate action history reward and valid timestep mask across batch
-        t_op_start = time.time()
-        q_values, actions, reward, mask, _ = self.generate_batch(batch, t_env, t_start)
-        #print(f"Generated trajectories: {time.time() - t_op_start: .3f} s")
-
-        nb, nt, _ = reward.size()
-        k = self.args.model_rollout_timesteps
-
-        t_op_start = time.time()
-        # build tree
-        r_total = 0
-        tree = Node('root')
-
-        for b in range(nb):
-            node = tree.visit()
-            for t in range(nt):
-                if mask[b, t].bool().item():
-                    name = list_to_hash(actions[b, t].tolist())
-                    r = self.args.gamma ** t * reward[b, t].item()
-                    if k and t == k - 1:
-                        # for the final action, use the action value estimate instead of the model reward
-                        r = q_values[b, t].sum()
-                    node = node.add(name, reward=r).visit()
-                    r_total += r
-                else:
-                    # terminated trajectory
-                    break
-        #print(f"Building tree: {time.time() - t_op_start: .3f} s")
-
-
-        t_op_start = time.time()
-        # find leaf nodes
-        q = queue.Queue()
-        q.put(tree, False)
-        leaves = []
-        while not q.empty():
-            n = q.get(False)
-            if len(n.children) == 0:
-                leaves.append(n)
-            else:
-                for k, v in n.children.items():
-                    q.put(v, False)
-        #print(f"Find leaf nodes: {time.time() - t_op_start: .3f} s")
-
-        t_op_start = time.time()
-        # backup from leaf nodes
-        for l in leaves:
-            q.put(l, False)
-        while not q.empty():
-            n = q.get(False)
-            if not n.is_root and not n.touched:
-                if len(n.children) > 0:
-                    if all([v.touched for k, v in n.children.items()]):
-                        n.parent.return_ += n.return_
-                        n.touched = True
-                        q.put(n.parent, False)
-                else:
-                    n.parent.return_ += n.return_
-                    n.touched = True
-                    q.put(n.parent, False)
-        #print(f"Backing up values: {time.time() - t_op_start: .3f} s")
-
-        t_op_start = time.time()
-        # traverse tree and normalise returns by visit count
-        q.put(tree, False)
-        while not q.empty():
-            n = q.get(False)
-            n.expected_return = n.return_ / n.visits
-            for c in list(n.children.values()):
-                q.put(c, False)
-        #print(f"Normalising values: {time.time() - t_op_start: .3f} s")
-
-        #print(f"leaves: {len(leaves)}")
-        #print(f"total reward: {r_total:.2f}, backed up: {tree.return_:.2f}")
-
-        return tree
-
-    def generate_batch(self, batch, t_env, t_start=0):
-
+    def initialise(self, batch, t_start):
+        # encode the real state
         if batch.device != self.device:
             batch.to(self.device)
 
         batch_size = self.args.model_rollout_batch_size
 
         self.representation_model.eval()
-        self.dynamics_model.eval()
-        self.actions_model.eval()
-        self.policy_model.eval()
-        self.reward_model.eval()
-        self.term_model.eval()
 
         with torch.no_grad():
 
             # get real starting states for the batch
             state = batch["state"][:, t_start, :self.state_size]
             avail_actions = batch["avail_actions"][:, t_start]
-            _, n_agents, n_actions = avail_actions.size()
             term_signal = batch["terminated"][:, t_start].float()
 
             # expand starting states into batch size
             state = state.repeat(batch_size, 1)
+            state = self.representation_model(state)
             avail_actions = avail_actions.repeat(batch_size, 1, 1)
             term_signal = term_signal.repeat(batch_size, 1)
+
+        return (state, avail_actions, term_signal)
+
+    def simulate(self, parent, action):
+
+        # name = "-".join([str(x) for x in (0, 1, 2)])
+        # create a new node to represent the new state
+        child = Node(action, self.action_space)
+        P, V, H, R, batch = child.batch = self.rollout(parent.batch, action)
+        child.batch = batch
+        child.t = parent.t + 1
+
+    def backup(self, history):
+        for node in history:
+            print(f" -- {str(node)}")
+
+    def mcts(self, batch, t_env, t_start):
+
+        n_sim = self.args.model_mcts_simulations
+        print(f"Performing {n_sim} MCTS iterations")
+
+        # initialise root node
+        root = Node('root', self.action_space)
+        root.batch = self.initialise(batch, t_start) # TODO these tensors might need to be held in CPU memory
+
+        # run mcts
+        for i in range(n_sim):
+            print(f"simulation {i + 1}")
+            node = root
+            depth = 0
+            # initialise history
+            history = []
+            while node.expanded():
+                # execute tree policy
+                node.visit()
+                history.append(node)
+                print(f"depth: {depth}: {node}")
+                node = self.select_child(node)
+
+            # expand current node
+            action, child = self.expand_node(node, batch, t_env, t_start)
+
+            history.append(child)
+            print(f"expanded {node.name} -> {child.name}")
+
+            print('backup ...')
+            history.reverse()
+            self.backup(history)
+            print("")
+
+
+
+        return None
+
+        # # generate action history reward and valid timestep mask across batch
+        # t_op_start = time.time()
+        # q_values, actions, rewards, mask, active_episodes = self.generate_batch(batch, t_env, t_start)
+        # #print(f"Generated trajectories: {time.time() - t_op_start: .3f} s")
+        #
+        # t_op_start = time.time()
+        # nb, nt, _ = rewards.size()
+        # k = self.args.model_rollout_timesteps
+        #
+        # # apply discounting and sum over episode
+        # coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
+        # rewards = torch.mul(rewards.squeeze(), coeff)
+        # G = rewards.sum(dim=1)
+        # #print(f"t={t_start} Returns")
+        # #print(np.histogram(G.flatten().to("cpu")))
+        #
+        # # add action value estimates for non-terminal episodes
+        # if len(active_episodes) > 0:
+        #     t_end = mask.min(dim=1)[1].flatten()
+        #     G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0].unsqueeze(dim=1)
+        #
+        # # rank and select action history H by discounted return G
+        # G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]
+        # G_ranked.sort(key=lambda x: x[1], reverse=True)
+        # selected = G_ranked[0]
+        #
+        # H = actions[selected[0]]  # take the best candidate
+        # #G = selected[1] # expected return for this candidate
+        #
+        # return H, rewards[selected[0]]
+
+
+    def rollout(self, node, actions):
+
+        # preform model based rollout from the current node
+
+        # get the current state variables and transfer to the correct device if necessary
+        batch = node.batch
+        for b in batch:
+            if b.device != self.device:
+                b.to(self.device)
+        state, avail_actions, term_signal = batch
+
+        batch_size = self.args.model_rollout_batch_size
+        n_agents, n_actions = self.action_space
+
+        self.dynamics_model.eval()
+        self.actions_model.eval()
+        self.policy_model.eval()
+        self.reward_model.eval()
+        self.term_model.eval()
+        self.value_model.eval()
+
+        with torch.no_grad():
 
             # track active episodes
             terminated = (term_signal > 0)
             active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
 
             # set the number of rollout timesteps
-            max_t = batch.max_seq_length - t_start - 1
-            k = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else max_t
+            max_t = self.args.episode_limit - node.t - 1
+            # k = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else max_t
+            k = 1
 
             # initialise hidden states
             ht, ct = self.dynamics_model.init_hidden(batch_size, self.device) # dynamics model hidden state
 
-            # reward history
-            R = torch.zeros(batch_size, max_t, 1).to(self.device)
 
-            # Q values
-            Q = torch.zeros(batch_size, max_t, n_agents, n_actions).to(self.device)
+            R = torch.zeros(batch_size, k, self.reward_size).to(self.device) # reward history
+            V = torch.zeros(batch_size, k, self.value_size).to(self.device) # n-step return estimate
+            P = torch.zeros(batch_size, k, n_agents, n_actions).to(self.device) # action priors
+            H = torch.zeros(batch_size, max_t, n_agents, dtype=torch.int).to(self.device) # action history
+            M = torch.zeros(batch_size, max_t, 1, dtype=torch.bool).to(self.device)  # active episode mask
 
-            # action history
-            H = torch.zeros(batch_size, max_t, n_agents, dtype=torch.int).to(self.device)
-
-            # active episode mask
-            M = torch.zeros(batch_size, max_t, 1, dtype=torch.bool).to(self.device)
-
-            print(f"Rolling out {k} timesteps")
+            ht = state
+            print(f"Rolling out {k} timesteps from t={node.t}")
             for t in range(0, k):
-                if t == 0:
-                    ht = self.representation_model(state)
 
                 # choose actions following current policy
                 agent_outputs = self.policy_model(ht).view(batch_size, n_agents, n_actions)
-                actions = self.model_mac.select_actions(agent_outputs, avail_actions, t_env)
+
+                #actions = self.model_mac.select_actions(agent_outputs, avail_actions)
                 actions_onehot = F.one_hot(actions, num_classes=n_actions)
 
                 # update action values and action history
-                Q[:, t, ...] = agent_outputs
+                P[:, t, ...] = agent_outputs
                 H[:, t, ...] = actions
 
                 # generate next state, reward, termination signal
@@ -541,8 +590,8 @@ class ModelMuZeroLearner:
                 reward = self.reward_model(ht)
                 term_signal = self.term_model(ht)
 
-                # clamp reward
-                reward[reward < 0] = 0
+                # # clamp reward
+                # reward[reward < 0] = 0
 
                 # record timestep reward
                 R[:, t, :] = reward
@@ -561,7 +610,6 @@ class ModelMuZeroLearner:
                 if t == max_t - 1:
                     terminated[active_episodes] = True
 
-
                 # generate and threshold avail_actions
                 avail_actions = self.actions_model(ht).view(batch_size, n_agents, n_actions)
                 avail_actions = (avail_actions > self.args.model_action_threshold).int()
@@ -577,7 +625,7 @@ class ModelMuZeroLearner:
                 if all(terminated):
                     break
 
-            return Q, H, R, M, active_episodes
+            return P, V, H, R, (ht, avail_actions, term_signal)
 
     def cuda(self):
         if self.dynamics_model:
@@ -592,6 +640,8 @@ class ModelMuZeroLearner:
             self.reward_model.cuda()
         if self.term_model:
             self.term_model.cuda()
+        if self.value_model:
+            self.value_model.cuda()
 
     def log_stats(self, t_env):
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
@@ -603,11 +653,13 @@ class ModelMuZeroLearner:
             self.logger.log_stat("model_term_train_loss", self.train_T_loss, t_env)
             self.logger.log_stat("model_available_actions_train_loss", self.train_aa_loss, t_env)
             self.logger.log_stat("model_policy_train_loss", self.train_p_loss, t_env)
+            self.logger.log_stat("model_value_train_loss", self.train_v_loss, t_env)
 
             self.logger.log_stat("model_reward_val_loss", self.val_r_loss, t_env)
             self.logger.log_stat("model_term_val_loss", self.val_T_loss, t_env)
             self.logger.log_stat("model_available_actions_val_loss", self.val_aa_loss, t_env)
             self.logger.log_stat("model_policy_val_loss", self.val_p_loss, t_env)
+            self.logger.log_stat("model_value_val_loss", self.val_v_loss, t_env)
 
             self.logger.log_stat("model_epsilon", self.model_mac.action_selector.epsilon, t_env)
             self.log_stats_t = t_env

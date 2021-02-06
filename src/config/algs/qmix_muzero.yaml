@@ -32,6 +32,7 @@ policy_model_hidden_dim: 64
 reward_model_hidden_dim: 64
 term_model_hidden_dim: 64
 reward_model_hidden_dim: 64
+value_model_hidden_dim: 64
 
 # model learning params
 model_min_samples: 32
@@ -40,14 +41,18 @@ model_learning_rate: 0.01
 model_grad_clip_norm: 0.001
 model_batch_size: 32
 model_intitial_epochs: 1
-model_epochs: 1 # per RL step
+model_epochs: 1 # per RL step (this is the number of times the replay buffer is sampled between real env execution)
 model_log_epochs: 10
-model_timesteps:  # default is to use all available timesteps
+model_bootstrap_timesteps: 10 # n in the n-step return estimate
+model_rollout_timesteps: 5 # number of timesteps to simulate during model training
 model_rollout_timestep_samples: 10
+model_mcts_simulations: 1
+model_mcts_c1: 1
+model_mcts_c2: 1
 
 # rollouts
 model_rollout_timesteps: # default to max scenario timesteps
-model_rollout_batch_size: 256
+model_rollout_batch_size: 1 # for this to be bigger we would need to generate more candidate actions (ie expand multiple child nodes)
 model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold
 model_max_rerolls: 1 # number of times search is allowed per episode
@@ -55,8 +60,8 @@ model_max_recovery_rerolls: 0 # how many recovery rerolls to allow per episode, 
 model_use_search: True
 
 # action selection
-model_mac: "model_mac"
-model_action_selector: "model_epsilon_greedy"
+model_mac: "muzero_mac"
+model_action_selector: "muzero"
 model_epsilon_start: 1.0
 model_epsilon_finish: 0.05
 model_epsilon_anneal_time: 5000

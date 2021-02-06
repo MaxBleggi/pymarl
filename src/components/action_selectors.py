@@ -93,3 +93,28 @@ class ModelEpsilonGreedyActionSelector():
 
 
 REGISTRY["model_epsilon_greedy"] = ModelEpsilonGreedyActionSelector
+
+class MuZeroActionSelector():
+
+    def __init__(self, args):
+        self.args = args
+        self.epsilon = 0
+
+    def select_action(self, agent_inputs, avail_actions, t_env, test_mode=False):
+
+        # Assuming agent_inputs is a batch of Q-Values for each agent bav
+
+        #print(f"t_env: {t_env}, test_mode: {test_mode}, epsilon:{self.epsilon}")
+        # mask actions that are excluded from selection
+        masked_q_values = agent_inputs.clone()
+        masked_q_values[avail_actions == 0.0] = -float("inf")  # should never be selected!
+
+        random_numbers = th.rand_like(agent_inputs[:, :, 0])
+        pick_random = (random_numbers < self.epsilon).long()
+        random_actions = Categorical(avail_actions.float()).sample().long()
+
+        picked_actions = pick_random * random_actions + (1 - pick_random) * masked_q_values.max(dim=2)[1]
+        return picked_actions
+
+
+REGISTRY["muzero"] = ModelEpsilonGreedyActionSelector

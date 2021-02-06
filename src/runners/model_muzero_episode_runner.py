@@ -27,10 +27,6 @@ class ModelMuZeroEpisodeRunner:
         # Log the first run
         self.log_train_stats_t = -1000000
 
-        self.rollout_steps = []
-        self.rollout_coverage = np.zeros((self.episode_limit,), dtype=np.int32)
-        self.p_rollout = 1/self.episode_limit
-
     def setup(self, scheme, groups, preprocess, mac, model=None):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
                                  preprocess=preprocess, device=self.args.device)
@@ -56,21 +52,8 @@ class ModelMuZeroEpisodeRunner:
 
         terminated = False
         episode_return = 0
-        partial_return = 0
-        expected_partial_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
 
-
-        search_initialised = False
-        if use_search:
-            print(f"Generating {self.args.model_rollout_batch_size} rollouts of depth {self.args.model_rollout_timesteps} with starting epsilon {self.model.model_mac.action_selector.epsilon:.3f}")
-            t_op_start = time.time()
-
-        #max_rerolls = max(1, int(np.sqrt(self.avg_rollouts)))
-        rerolls = 0
-        recovery_rerolls = 0
-        rollout_steps = 0
-        rollout_valid = False
         while not terminated:
 
             avail_actions = self.env.get_avail_actions()
@@ -82,57 +65,67 @@ class ModelMuZeroEpisodeRunner:
 
             self.batch.update(pre_transition_data, ts=self.t)
 
-            if rollout_valid or (use_search and (self.rollout_coverage[self.t] == 0 or np.random.rand() < self.p_rollout)):
-                if not search_initialised:
-                    print(f"Generating trajectories from timestep {self.t}, rollout {rerolls + 1}/{self.args.model_max_rerolls}")
-                    H, R = self.model.mcts(self.batch, self.t_env, self.t)
-                    h_index = 0
-                    search_initialised = True
-                    rerolls += 1
+            if use_search:
+                mcts_action = self.model.mcts(self.batch, self.t_env, self.t)
 
-                try:
-                    reward, terminated, env_info = self.env.step(H[h_index])
-                    self.rollout_coverage[self.t] += 1
-                    rollout_valid = True
-                except:
-                    print(f"Trajectory failed at t={self.t}, h_index={h_index}")
-                    # retry action with new trajectory if rerolls available
-                    if recovery_rerolls < self.args.model_max_recovery_rerolls:
-                        print(f"Generating trajectories from timestep {self.t}, recovery rollout {recovery_rerolls + 1}/{self.args.model_max_recovery_rerolls}")
-                        H, R = self.model.mcts(self.batch, self.t_env, self.t)
-                        h_index = 0
-                        recovery_rerolls += 1
-                        # select action, avail. actions is up to date so this will always succeed
-                        reward, terminated, env_info = self.env.step(H[h_index])
-                        self.rollout_coverage[self.t] += 1
-                        rollout_valid = True
-                    else:
-                        # recovery rollout failed, allow additional rerolls if available otherwise use standard search
-                        rollout_valid = False
-                        search_initialised = False
-
-                        # no more rerolls available, default to standard search procedure
-                        use_search = rerolls <= self.args.model_max_rerolls
-
-
-            if rollout_valid:
-                # search based action selection was successful
-                actions = H[h_index].unsqueeze(0)
-                partial_return += reward
-                expected_partial_return += R[h_index].item()
-                print(
-                    f"t={self.t}: actions: {actions[0].tolist()} reward={reward:.2f}, expected reward={R[h_index].item():.2f}")
-                rollout_steps += 1
-                h_index += 1
-
-            if not rollout_valid:
-                # search failed, fallback to standard action selection method
                 # Pass the entire batch of experiences up till now to the agents
                 # Receive the actions for each agent at this timestep in a batch of size 1
                 actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                 reward, terminated, env_info = self.env.step(actions[0])
                 # print(
                 #     f"t={self.t}: actions: {actions[0]} reward={reward:.2f}")
+
+            else:
+                # Pass the entire batch of experiences up till now to the agents
+                # Receive the actions for each agent at this timestep in a batch of size 1
+                actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
+                reward, terminated, env_info = self.env.step(actions[0])
+                # print(
+                #     f"t={self.t}: actions: {actions[0]} reward={reward:.2f}")
+
+
+            # if rollout_valid or (use_search and (self.rollout_coverage[self.t] == 0 or np.random.rand() < self.p_rollout)):
+            #     if not search_initialised:
+            #         print(f"Generating trajectories from timestep {self.t}, rollout {rerolls + 1}/{self.args.model_max_rerolls}")
+            #         H, R = self.model.mcts(self.batch, self.t_env, self.t)
+            #         h_index = 0
+            #         search_initialised = True
+            #         rerolls += 1
+            #
+            #     try:
+            #         reward, terminated, env_info = self.env.step(H[h_index])
+            #         self.rollout_coverage[self.t] += 1
+            #         rollout_valid = True
+            #     except:
+            #         print(f"Trajectory failed at t={self.t}, h_index={h_index}")
+            #         # retry action with new trajectory if rerolls available
+            #         if recovery_rerolls < self.args.model_max_recovery_rerolls:
+            #             print(f"Generating trajectories from timestep {self.t}, recovery rollout {recovery_rerolls + 1}/{self.args.model_max_recovery_rerolls}")
+            #             H, R = self.model.mcts(self.batch, self.t_env, self.t)
+            #             h_index = 0
+            #             recovery_rerolls += 1
+            #             # select action, avail. actions is up to date so this will always succeed
+            #             reward, terminated, env_info = self.env.step(H[h_index])
+            #             self.rollout_coverage[self.t] += 1
+            #             rollout_valid = True
+            #         else:
+            #             # recovery rollout failed, allow additional rerolls if available otherwise use standard search
+            #             rollout_valid = False
+            #             search_initialised = False
+            #
+            #             # no more rerolls available, default to standard search procedure
+            #             use_search = rerolls <= self.args.model_max_rerolls
+            #
+            #
+            # if rollout_valid:
+            #     # search based action selection was successful
+            #     actions = H[h_index].unsqueeze(0)
+            #     partial_return += reward
+            #     expected_partial_return += R[h_index].item()
+            #     print(
+            #         f"t={self.t}: actions: {actions[0].tolist()} reward={reward:.2f}, expected reward={R[h_index].item():.2f}")
+            #     rollout_steps += 1
+            #     h_index += 1
 
 
             episode_return += reward
@@ -145,7 +138,6 @@ class ModelMuZeroEpisodeRunner:
             }
 
             self.batch.update(post_transition_data, ts=self.t)
-
             self.t += 1
 
         last_data = {
@@ -154,10 +146,6 @@ class ModelMuZeroEpisodeRunner:
             "obs": [self.env.get_obs()]
         }
         self.batch.update(last_data, ts=self.t)
-
-        if search_initialised:
-            print(f"Search time: {time.time() - t_op_start:.2f} s")
-            self.rollout_steps.append(rollout_steps)
 
         # Select actions in the last stored state
         actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
@@ -182,10 +170,10 @@ class ModelMuZeroEpisodeRunner:
             self._log(cur_returns, cur_stats, log_prefix)
             if hasattr(self.mac.action_selector, "epsilon"):
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
-            # log rollout steps
-            if len(self.rollout_steps) > 0:
-                self.logger.log_stat("valid_rollout_steps", np.array(self.rollout_steps).mean(), self.t_env)
-                self.rollout_steps = []
+            # # log rollout steps
+            # if len(self.rollout_steps) > 0:
+            #     self.logger.log_stat("valid_rollout_steps", np.array(self.rollout_steps).mean(), self.t_env)
+            #     self.rollout_steps = []
             self.log_train_stats_t = self.t_env
 
         return self.batch, episode_return

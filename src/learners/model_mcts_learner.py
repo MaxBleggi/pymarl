@@ -267,7 +267,7 @@ class ModelMCTSLearner:
         self.term_model.eval()
 
         with torch.no_grad():
-            state, actions, y = self.get_model_input_output(*vars, start_t="random", max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t="random", max_t=self.args.model_rollout_timesteps)
             yp, _ = self.run_model(state, actions)
             loss_vector = F.mse_loss(yp, y, reduction='none')
 
@@ -331,7 +331,7 @@ class ModelMCTSLearner:
         for i, t in enumerate(timesteps):
 
             # get data
-            state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_timesteps)
+            state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_rollout_timesteps)
             #print(t, max_t.item(), rollout_timesteps, t + rollout_timesteps, state.size())
 
             # make predictions
