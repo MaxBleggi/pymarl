@@ -391,7 +391,7 @@ class ModelMuZeroLearner:
         """
         use tree policy to select a child
         """
-        children = list(parent.children.keys())
+        children = [k for k,v in parent.children.items() if not v.terminal]
         child = random.choice(children)
         return parent.children[child]
 
@@ -399,28 +399,28 @@ class ModelMuZeroLearner:
         """
         UCB action selection
         """
+        device = self.device
         c1 = self.args.model_mcts_c1
         c2 = self.args.model_mcts_c2
-        scores = np.zeros((parent.n_agents, parent.n_actions))
 
-        for agent in range(parent.n_agents):
-            for action in range(parent.n_actions):
-                child = parent.edges[agent][action]
+        parent_count = torch.ones(self.action_space, device=device) * parent.count
+        visit_ratio = torch.sqrt(parent_count) / (1 + parent.child_visits)
+        # print('visit ratio')
+        # print(visit_ratio)
 
-                visit_ratio = np.sqrt(parent.count) / (1 + child.count)
-                c2_ratio = (parent.count + c2 + 1) / c2
+        c2_ratio = (parent_count + c2 + 1) / c2
+        # print('c2 ratio')
+        # print(c2_ratio)
 
-                scores[agent][action] = child.value + child.prior * visit_ratio * (c1 + np.log(c2_ratio))
+        scores = parent.action_values + parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
+        # print('scores')
+        # print(scores)
 
-        return np.argmax(scores, axis=1)
+        selected_actions = torch.argmax(scores, dim=1)
+        # print('selected actions')
+        # print(selected_actions)
 
-    def expand_node(self, parent):
-        # select a joint action and add it to the set of children
-        action = self.select_action(parent)
-        action = action.repeat(self.args.model_rollout_batch_size, 1)
-        child = self.simulate(parent, action)
-        parent.add_child(tuple(action), child)
-        return action, child
+        return selected_actions
 
     def initialise(self, batch, t_start):
         # encode the real state
@@ -430,6 +430,7 @@ class ModelMuZeroLearner:
         batch_size = self.args.model_rollout_batch_size
 
         self.representation_model.eval()
+        self.dynamics_model.eval()
 
         with torch.no_grad():
 
@@ -440,20 +441,40 @@ class ModelMuZeroLearner:
 
             # expand starting states into batch size
             state = state.repeat(batch_size, 1)
-            state = self.representation_model(state)
             avail_actions = avail_actions.repeat(batch_size, 1, 1)
             term_signal = term_signal.repeat(batch_size, 1)
 
-        return (state, avail_actions, term_signal)
+            # generate implicit state
+            ht = self.representation_model(state)
+
+            # initialise dynamics model hidden state
+            _, ct = self.dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
+
+        return (ht, ct, avail_actions, term_signal)
+
+    def expand_node(self, parent):
+        # select a joint action and add it to the set of children
+        action = self.select_action(parent)
+        key = tuple(action.tolist())
+        action = action.repeat(self.args.model_rollout_batch_size, 1)
+        # child = self.simulate(parent, action)
+
+        # simulate and store results in new child node        
+        child = Node(key, self.action_space, device=self.device)
+        Q, V, R, terminal, state = self.rollout(parent, action)
+        child.update(Q, V, R, terminal, state, parent.t + 1)
+        parent.add_child(key, child)
+        
+        return action, child
 
     def simulate(self, parent, action):
 
         # name = "-".join([str(x) for x in (0, 1, 2)])
         # create a new node to represent the new state
-        child = Node(action, self.action_space)
-        P, V, H, R, batch = child.batch = self.rollout(parent.batch, action)
-        child.batch = batch
-        child.t = parent.t + 1
+        child = Node(action, self.action_space, device=self.device)
+        
+
+        return child
 
     def backup(self, history):
         for node in history:
@@ -465,7 +486,7 @@ class ModelMuZeroLearner:
         print(f"Performing {n_sim} MCTS iterations")
 
         # initialise root node
-        root = Node('root', self.action_space)
+        root = Node('root', self.action_space, device=self.device)
         root.batch = self.initialise(batch, t_start) # TODO these tensors might need to be held in CPU memory
 
         # run mcts
@@ -474,7 +495,7 @@ class ModelMuZeroLearner:
             node = root
             depth = 0
             # initialise history
-            history = []
+            history = [root]
             while node.expanded():
                 # execute tree policy
                 node.visit()
@@ -483,7 +504,7 @@ class ModelMuZeroLearner:
                 node = self.select_child(node)
 
             # expand current node
-            action, child = self.expand_node(node, batch, t_env, t_start)
+            action, child = self.expand_node(node)
 
             history.append(child)
             print(f"expanded {node.name} -> {child.name}")
@@ -492,8 +513,6 @@ class ModelMuZeroLearner:
             history.reverse()
             self.backup(history)
             print("")
-
-
 
         return None
 
@@ -538,7 +557,7 @@ class ModelMuZeroLearner:
         for b in batch:
             if b.device != self.device:
                 b.to(self.device)
-        state, avail_actions, term_signal = batch
+        ht, ct, avail_actions, term_signal = batch
 
         batch_size = self.args.model_rollout_batch_size
         n_agents, n_actions = self.action_space
@@ -561,17 +580,12 @@ class ModelMuZeroLearner:
             # k = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else max_t
             k = 1
 
-            # initialise hidden states
-            ht, ct = self.dynamics_model.init_hidden(batch_size, self.device) # dynamics model hidden state
-
-
             R = torch.zeros(batch_size, k, self.reward_size).to(self.device) # reward history
             V = torch.zeros(batch_size, k, self.value_size).to(self.device) # n-step return estimate
-            P = torch.zeros(batch_size, k, n_agents, n_actions).to(self.device) # action priors
+            Q = torch.zeros(batch_size, k, n_agents, n_actions).to(self.device) # action values
             H = torch.zeros(batch_size, max_t, n_agents, dtype=torch.int).to(self.device) # action history
             M = torch.zeros(batch_size, max_t, 1, dtype=torch.bool).to(self.device)  # active episode mask
 
-            ht = state
             print(f"Rolling out {k} timesteps from t={node.t}")
             for t in range(0, k):
 
@@ -582,7 +596,7 @@ class ModelMuZeroLearner:
                 actions_onehot = F.one_hot(actions, num_classes=n_actions)
 
                 # update action values and action history
-                P[:, t, ...] = agent_outputs
+                Q[:, t, ...] = agent_outputs
                 H[:, t, ...] = actions
 
                 # generate next state, reward, termination signal
@@ -625,7 +639,7 @@ class ModelMuZeroLearner:
                 if all(terminated):
                     break
 
-            return P, V, H, R, (ht, avail_actions, term_signal)
+            return Q, V, R, terminated, (ht, ct, avail_actions, term_signal)
 
     def cuda(self):
         if self.dynamics_model:
