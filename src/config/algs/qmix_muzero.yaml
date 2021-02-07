@@ -47,28 +47,26 @@ model_bootstrap_timesteps: 10 # n in the n-step return estimate
 model_rollout_timesteps: 5 # number of timesteps to simulate during model training
 model_rollout_timestep_samples: 10
 model_mcts_simulations: 1
-model_mcts_c1: 1
-model_mcts_c2: 1
 
 # rollouts
 model_rollout_timesteps: # default to max scenario timesteps
 model_rollout_batch_size: 1 # for this to be bigger we would need to generate more candidate actions (ie expand multiple child nodes)
 model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold
-model_max_rerolls: 1 # number of times search is allowed per episode
-model_max_recovery_rerolls: 0 # how many recovery rerolls to allow per episode, used extend failed trajectories
 model_use_search: True
 
 # action selection
 model_mac: "muzero_mac"
 model_action_selector: "muzero"
-model_epsilon_start: 1.0
-model_epsilon_finish: 0.05
-model_epsilon_anneal_time: 5000
-model_epsilon_delay: 0
+ucb_temperature_start: 1.0
+ucb_temperature_finish: 0.25
+ucb_temperature_anneal_time: 50000
+ucb_temperature_delay: 0
+ucb_c1: 1.25
+ucb_c2: 19652
 
 # debug
 model_save_val_data: False
 #episode_dir: "/home/ubuntu/masters/experiments/model-learning/1/val_data"
 
-name: "qmix-rts-k-max-retries"
+name: "qmix-muzero"

@@ -1,6 +1,18 @@
 import torch
 import torch.nn.functional as F
 
+class TreeState():
+    # this is a set of tensors representing the dynimacis model hidden state, available actions and termination status
+    def __init__(self, ht, ct, avail_actions, term_signal):
+
+        self.ht = ht
+        self.ct = ct
+        self.avail_actions = avail_actions
+        self.term_signal = term_signal
+
+    def totuple(self):
+        return (self.ht, self.ct, self.avail_actions, self.term_signal)
+
 class Node():
 
     def __init__(self, name, action_space, device='cpu'):
@@ -8,14 +20,11 @@ class Node():
         # the number of agents and actions per agent for the scenario
         self.action_space = action_space
         self.n_agents, self.n_actions = self.action_space
+        self.device = device
 
-        # each possible joint action is recorded as a separate child
-        # potential size is n_actions ** n_agents
-        # a child is added when this node is expanded
-        self.children = {}
-        # self.edges = self.init_edges()
-        self.t = 0 # timestep represented by this node
-        self.state = None # this is a tuple of tensors representing the dynimacis model hidden state, available actions and termination status
+        self.t = 0  # timestep represented by this node
+        self.children = {} # each possible joint action is recorded as a separate child
+        self.state = None # TreeState
         self.priors = torch.zeros(self.action_space, device=device)
         self.child_visits = torch.zeros(self.action_space, device=device)
         self.action_values = torch.zeros(self.action_space, device=device)
@@ -23,7 +32,7 @@ class Node():
         self.value = 0
         self.count = 0
         self.terminal = False
-        self.device = device
+
 
     def expanded(self):
         return len(self.children) > 0
@@ -37,7 +46,7 @@ class Node():
 
     def update(self, Q, V, R, terminal, state, t):
         self.state = state
-        self.priors = F.softmax(Q[-1])
+        self.priors = F.softmax(Q[-1], dim=-1)
         self.action_values = Q[-1]
         self.value = V[-1].item()
         self.reward = R[-1].item()

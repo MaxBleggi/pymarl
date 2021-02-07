@@ -8,6 +8,7 @@
 #  - gradient tricks (see appendix G)
 #  - prioritised replay
 #  - can probably skip avail_actions model and rely on policy outputs to make invalid actions unlikely
+#  - dirchlect alpha?
 
 import time
 import torch
@@ -395,13 +396,14 @@ class ModelMuZeroLearner:
         child = random.choice(children)
         return parent.children[child]
 
-    def select_action(self, parent):
+    def select_action(self, parent, t_env):
         """
         UCB action selection
         """
         device = self.device
-        c1 = self.args.model_mcts_c1
-        c2 = self.args.model_mcts_c2
+        c1 = self.args.ucb_c1
+        c2 = self.args.ucb_c2
+        batch_size = self.args.model_rollout_batch_size
 
         parent_count = torch.ones(self.action_space, device=device) * parent.count
         visit_ratio = torch.sqrt(parent_count) / (1 + parent.child_visits)
@@ -413,10 +415,12 @@ class ModelMuZeroLearner:
         # print(c2_ratio)
 
         scores = parent.action_values + parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
+        scores = scores.repeat(batch_size, 1, 1)
         # print('scores')
         # print(scores)
 
-        selected_actions = torch.argmax(scores, dim=1)
+        #selected_actions = torch.argmax(scores, dim=1)
+        selected_actions = self.model_mac.select_actions(scores, parent.state.avail_actions, t_env)
         # print('selected actions')
         # print(selected_actions)
 
@@ -450,12 +454,12 @@ class ModelMuZeroLearner:
             # initialise dynamics model hidden state
             _, ct = self.dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
 
-        return (ht, ct, avail_actions, term_signal)
+        return TreeState(ht, ct, avail_actions, term_signal)
 
-    def expand_node(self, parent):
+    def expand_node(self, parent, t_env):
         # select a joint action and add it to the set of children
-        action = self.select_action(parent)
-        key = tuple(action.tolist())
+        action = self.select_action(parent, t_env)
+        key = tuple(action.flatten().cpu().tolist())
         action = action.repeat(self.args.model_rollout_batch_size, 1)
         # child = self.simulate(parent, action)
 
@@ -464,17 +468,8 @@ class ModelMuZeroLearner:
         Q, V, R, terminal, state = self.rollout(parent, action)
         child.update(Q, V, R, terminal, state, parent.t + 1)
         parent.add_child(key, child)
-        
+
         return action, child
-
-    def simulate(self, parent, action):
-
-        # name = "-".join([str(x) for x in (0, 1, 2)])
-        # create a new node to represent the new state
-        child = Node(action, self.action_space, device=self.device)
-        
-
-        return child
 
     def backup(self, history):
         for node in history:
@@ -487,11 +482,12 @@ class ModelMuZeroLearner:
 
         # initialise root node
         root = Node('root', self.action_space, device=self.device)
-        root.batch = self.initialise(batch, t_start) # TODO these tensors might need to be held in CPU memory
+        root.t = t_start
+        root.state = self.initialise(batch, t_start) # TODO these tensors might need to be held in CPU memory
 
         # run mcts
         for i in range(n_sim):
-            print(f"simulation {i + 1}")
+            print(f"Simulation {i + 1}")
             node = root
             depth = 0
             # initialise history
@@ -504,7 +500,7 @@ class ModelMuZeroLearner:
                 node = self.select_child(node)
 
             # expand current node
-            action, child = self.expand_node(node)
+            action, child = self.expand_node(node, t_env)
 
             history.append(child)
             print(f"expanded {node.name} -> {child.name}")
@@ -553,12 +549,11 @@ class ModelMuZeroLearner:
         # preform model based rollout from the current node
 
         # get the current state variables and transfer to the correct device if necessary
-        batch = node.batch
-        for b in batch:
-            if b.device != self.device:
-                b.to(self.device)
-        ht, ct, avail_actions, term_signal = batch
-
+        # batch = node.batch
+        # for b in batch:
+        #     if b.device != self.device:
+        #         b.to(self.device)
+        ht, ct, avail_actions, term_signal = node.state.totuple()
         batch_size = self.args.model_rollout_batch_size
         n_agents, n_actions = self.action_space
 
@@ -639,7 +634,7 @@ class ModelMuZeroLearner:
                 if all(terminated):
                     break
 
-            return Q, V, R, terminated, (ht, ct, avail_actions, term_signal)
+            return Q, V, R, terminated, TreeState(ht, ct, avail_actions, term_signal)
 
     def cuda(self):
         if self.dynamics_model:
