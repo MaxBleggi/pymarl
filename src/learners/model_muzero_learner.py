@@ -1,8 +1,6 @@
 #TODO
 #  - representation function needs to take a history of previous real states
-#  - softmax temperature
 #  - minmax stats
-#  - mask out invalid actions from ucb ranking
 #  - expand leaf nodes in parallel
 #  - add l2 loss
 #  - gradient tricks (see appendix G)
@@ -158,7 +156,8 @@ class ModelMuZeroLearner:
         for i in range(0, ntimesteps):                
             r = reward[:, i + 1:i + n + 1]
             c = coeff[:, :r.size()[1]]        
-            value[:, i] = torch.mul(r, c).sum(dim=1)         
+            # value[:, i] = torch.mul(r, c).sum(dim=1)
+            value[:, i] = r.sum(dim=1)
 
         # termination signal
         terminated = batch["terminated"][:, :-1].float()
@@ -390,13 +389,17 @@ class ModelMuZeroLearner:
 
     def select_child(self, parent):
         """
-        use tree policy to select a child
+        use tree policy to select a child via max ucb
         """
-        children = [k for k,v in parent.children.items() if not v.terminal]
-        child = random.choice(children)
-        return parent.children[child]
+        action = self.select_action(parent, greedy=True)
+        key = tuple(action.flatten().cpu().tolist())
+        print('selecting greedy action', key)
+        if key in parent.children:
+            return parent.children[key]
+        else:
+            return None
 
-    def select_action(self, parent, t_env):
+    def select_action(self, parent, t_env=0, greedy=False):
         """
         UCB action selection
         """
@@ -420,7 +423,7 @@ class ModelMuZeroLearner:
         # print(scores)
 
         #selected_actions = torch.argmax(scores, dim=1)
-        selected_actions = self.model_mac.select_actions(scores, parent.state.avail_actions, t_env)
+        selected_actions = self.model_mac.select_actions(scores, parent.state.avail_actions, t_env=t_env, test_mode=greedy)
         # print('selected actions')
         # print(selected_actions)
 
@@ -458,22 +461,30 @@ class ModelMuZeroLearner:
 
     def expand_node(self, parent, t_env):
         # select a joint action and add it to the set of children
-        action = self.select_action(parent, t_env)
+        action = self.select_action(parent, t_env=t_env)
         key = tuple(action.flatten().cpu().tolist())
         action = action.repeat(self.args.model_rollout_batch_size, 1)
         # child = self.simulate(parent, action)
 
-        # simulate and store results in new child node        
-        child = Node(key, self.action_space, device=self.device)
+        # simulate and store results in new child node
+        child = Node(key, self.action_space, t=parent.t+1, device=self.device)
         Q, V, R, terminal, state = self.rollout(parent, action)
-        child.update(Q, V, R, terminal, state, parent.t + 1)
+        child.update(Q, V, R, terminal, state)
         parent.add_child(key, child)
 
-        return action, child
+        return child
 
     def backup(self, history):
-        for node in history:
-            print(f" -- {str(node)}")
+        i = len(history) - 1
+        leaf, _ = history.pop(0)
+        G = (self.args.gamma ** i) * (leaf.reward + leaf.value) # todo: do we double count rt ?
+
+        i -= 1
+        for node, action in history:
+            G += (self.args.gamma ** i) * node.reward
+            print(f" -- {str(node)}, {action}, r={node.reward}, i={i}, G={G}")
+            node.backup(action, G)
+            i -= 1
 
     def mcts(self, batch, t_env, t_start):
 
@@ -481,29 +492,29 @@ class ModelMuZeroLearner:
         print(f"Performing {n_sim} MCTS iterations")
 
         # initialise root node
-        root = Node('root', self.action_space, device=self.device)
-        root.t = t_start
+        root = Node('root', self.action_space, t=t_start, device=self.device)
         root.state = self.initialise(batch, t_start) # TODO these tensors might need to be held in CPU memory
 
         # run mcts
         for i in range(n_sim):
             print(f"Simulation {i + 1}")
-            node = root
+            parent = child = root
             depth = 0
-            # initialise history
-            history = [root]
-            while node.expanded():
+            history = []
+
+            while child:
                 # execute tree policy
-                node.visit()
-                history.append(node)
-                print(f"depth: {depth}: {node}")
-                node = self.select_child(node)
+                print(f"depth: {depth}: {parent}")
+                child = self.select_child(parent)
+                if child:
+                    history.append((parent, child.name))
+                    parent = child
 
             # expand current node
-            action, child = self.expand_node(node, t_env)
-
-            history.append(child)
-            print(f"expanded {node.name} -> {child.name}")
+            child = self.expand_node(parent, t_env)
+            history.append((parent, child.name))
+            history.append((child, None))
+            print(f"expanded {parent.name} -> {child.name}")
 
             print('backup ...')
             history.reverse()
