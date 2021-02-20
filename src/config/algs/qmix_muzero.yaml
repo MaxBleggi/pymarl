@@ -48,6 +48,7 @@ model_rollout_timesteps: 5 # number of timesteps to simulate during model traini
 model_rollout_timestep_samples: 10
 model_mcts_simulations: 50
 model_state_prior_steps: 10 # number of prior timesteps to use for encoding state
+model_dirichlet_alpha: 0.25
 
 # rollouts
 model_rollout_timesteps: # default to max scenario timesteps

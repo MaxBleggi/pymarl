@@ -1,6 +1,4 @@
 #TODO
-#  - representation function needs to take a history of previous real states
-#  - expand leaf nodes in parallel
 #  - add l2 loss
 #  - gradient tricks (see appendix G)
 #  - prioritised replay
@@ -10,7 +8,7 @@
 import time
 import torch
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Dirichlet
 
 from modules.models.representation import RepresentationModel
 from modules.models.dynamics import DynamicsModel
@@ -491,6 +489,10 @@ class ModelMuZeroLearner:
             node.backup(action, G)
             i -= 1
 
+    def add_exploration_noise(self, x):
+        m = Dirichlet(torch.ones_like(x) * self.args.model_dirichlet_alpha)
+        return x + m.sample()
+
     def mcts(self, batch, t_env, t_start):
 
         self.tree_stats.clear()
@@ -500,6 +502,7 @@ class ModelMuZeroLearner:
         # initialise root node
         root = Node('root', self.action_space, t=t_start, device=self.device)
         root.state = self.initialise(batch, t_start) # TODO these tensors might need to be held in CPU memory
+        root.priors = self.add_exploration_noise(root.priors)
 
         # run mcts
         for i in range(n_sim):
