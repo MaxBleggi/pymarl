@@ -3,7 +3,6 @@
 #  - gradient tricks (see appendix G)
 #  - prioritised replay
 #  - can probably skip avail_actions model and rely on policy outputs to make invalid actions unlikely
-#  - dirchlect alpha?
 
 import time
 import torch
@@ -418,7 +417,7 @@ class ModelMuZeroLearner:
         # print(c2_ratio)
 
         nq = self.tree_stats.normalize(parent.action_values)
-        scores =  nq + parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
+        scores =  nq if greedy else nq + parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
         scores = scores.repeat(batch_size, 1, 1)
         # print('scores')
         # print(scores)
