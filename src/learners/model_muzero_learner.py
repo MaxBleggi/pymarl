@@ -205,12 +205,14 @@ class ModelMuZeroLearner:
         else:
             start = start_t
 
-        s = s[:, start:]
+        start_s = max(0, start - self.args.model_state_prior_steps)
+        end_s = start_s + self.args.model_state_prior_steps
+        s = s[:, start_s:end_s]
+
         a = a[:, start:]
         y = y[:, start:]
 
         if max_t:
-            s = s[:, :max_t]
             a = a[:, :max_t]
             y = y[:, :max_t]
 
@@ -226,7 +228,7 @@ class ModelMuZeroLearner:
         for t in range(0, steps):
 
             if t == 0:
-                ht = self.representation_model(state[:, t, :])
+                ht = self.representation_model(state)
 
             at = actions[:, t, :]
             avt = self.actions_model(ht)
@@ -443,12 +445,13 @@ class ModelMuZeroLearner:
         with torch.no_grad():
 
             # get real starting states for the batch
-            state = batch["state"][:, t_start, :self.state_size]
+            start_s = max(0, t_start - self.args.model_state_prior_steps)
+            state = batch["state"][:, start_s:t_start+1, :self.state_size]
             avail_actions = batch["avail_actions"][:, t_start]
             term_signal = batch["terminated"][:, t_start].float()
 
             # expand starting states into batch size
-            state = state.repeat(batch_size, 1)
+            state = state.repeat(batch_size, 1, 1)
             avail_actions = avail_actions.repeat(batch_size, 1, 1)
             term_signal = term_signal.repeat(batch_size, 1)
 
