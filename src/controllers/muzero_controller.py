@@ -10,8 +10,8 @@ class MuZeroMAC:
         self.action_selector = action_REGISTRY[args.model_action_selector](args)
 
     # used by runners to generate real experience
-    def select_actions(self, agent_outputs, avail_actions, t_env, test_mode=False):
+    def select_actions(self, agent_outputs, avail_actions, t_env, greedy=False):
         # Only select actions for the selected batch elements in bs
-        chosen_actions = self.action_selector.select_action(agent_outputs, avail_actions, t_env, test_mode=test_mode)
+        chosen_actions = self.action_selector.select_action(agent_outputs, avail_actions, t_env, greedy=greedy)
         return chosen_actions
 

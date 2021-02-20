@@ -104,13 +104,15 @@ class MuZeroActionSelector():
         self.epsilon = self.schedule.eval(0)
         self.greedy_epsilon = 1e-3
 
-    def select_action(self, agent_inputs, avail_actions, t_env, test_mode=False):
+    def select_action(self, agent_inputs, avail_actions, t_env, greedy=False):
         masked_policies = agent_inputs.clone()
-        masked_policies[avail_actions == 0.0] = -float("inf")
+        if greedy:
+            masked_policies[avail_actions == 0.0] = -float("inf")
+            self.epsilon = self.greedy_epsilon
+        else:
+            self.epsilon = self.schedule.eval(t_env)
 
-        self.epsilon = self.greedy_epsilon if test_mode else self.schedule.eval(t_env)
         masked_policies = F.gumbel_softmax(masked_policies, dim=-1, tau=self.epsilon)
-
         picked_actions = Categorical(masked_policies).sample().long()
         return picked_actions
 

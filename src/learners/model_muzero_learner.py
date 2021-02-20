@@ -1,6 +1,5 @@
 #TODO
 #  - representation function needs to take a history of previous real states
-#  - minmax stats
 #  - expand leaf nodes in parallel
 #  - add l2 loss
 #  - gradient tricks (see appendix G)
@@ -110,6 +109,7 @@ class ModelMuZeroLearner:
         self.epochs = 0
         self.save_index = 0
 
+        self.tree_stats = TreeStats()
         self.trained = False
 
         # debugging
@@ -393,7 +393,7 @@ class ModelMuZeroLearner:
         """
         action = self.select_action(parent, greedy=True)
         key = tuple(action.flatten().cpu().tolist())
-        print('selecting greedy action', key)
+        #print('selecting greedy action', key)
         if key in parent.children:
             return parent.children[key]
         else:
@@ -417,13 +417,14 @@ class ModelMuZeroLearner:
         # print('c2 ratio')
         # print(c2_ratio)
 
-        scores = parent.action_values + parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
+        nq = self.tree_stats.normalize(parent.action_values)
+        scores =  nq + parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
         scores = scores.repeat(batch_size, 1, 1)
         # print('scores')
         # print(scores)
 
         #selected_actions = torch.argmax(scores, dim=1)
-        selected_actions = self.model_mac.select_actions(scores, parent.state.avail_actions, t_env=t_env, test_mode=greedy)
+        selected_actions = self.model_mac.select_actions(scores, parent.state.avail_actions, t_env=t_env, greedy=greedy)
         # print('selected actions')
         # print(selected_actions)
 
@@ -469,6 +470,7 @@ class ModelMuZeroLearner:
         # simulate and store results in new child node
         child = Node(key, self.action_space, t=parent.t+1, device=self.device)
         Q, V, R, terminal, state = self.rollout(parent, action)
+        self.tree_stats.update(Q)
         child.update(Q, V, R, terminal, state)
         parent.add_child(key, child)
 
@@ -482,14 +484,15 @@ class ModelMuZeroLearner:
         i -= 1
         for node, action in history:
             G += (self.args.gamma ** i) * node.reward
-            print(f" -- {str(node)}, {action}, r={node.reward}, i={i}, G={G}")
+            #print(f" -- {str(node)}, {action}, r={node.reward}, i={i}, G={G}")
             node.backup(action, G)
             i -= 1
 
     def mcts(self, batch, t_env, t_start):
 
+        self.tree_stats.clear()
         n_sim = self.args.model_mcts_simulations
-        print(f"Performing {n_sim} MCTS iterations")
+        #print(f"Performing {n_sim} MCTS iterations")
 
         # initialise root node
         root = Node('root', self.action_space, t=t_start, device=self.device)
@@ -497,14 +500,14 @@ class ModelMuZeroLearner:
 
         # run mcts
         for i in range(n_sim):
-            print(f"Simulation {i + 1}")
+            #print(f"Simulation {i + 1}")
             parent = child = root
             depth = 0
             history = []
 
             while child:
                 # execute tree policy
-                print(f"depth: {depth}: {parent}")
+                #print(f"depth: {depth}: {parent}")
                 child = self.select_child(parent)
                 if child:
                     history.append((parent, child.name))
@@ -514,46 +517,16 @@ class ModelMuZeroLearner:
             child = self.expand_node(parent, t_env)
             history.append((parent, child.name))
             history.append((child, None))
-            print(f"expanded {parent.name} -> {child.name}")
+            #print(f"expanded {parent.name} -> {child.name}")
 
-            print('backup ...')
+            #print('backup ...')
             history.reverse()
             self.backup(history)
-            print("")
+            #print("")
 
-        return None
-
-        # # generate action history reward and valid timestep mask across batch
-        # t_op_start = time.time()
-        # q_values, actions, rewards, mask, active_episodes = self.generate_batch(batch, t_env, t_start)
-        # #print(f"Generated trajectories: {time.time() - t_op_start: .3f} s")
-        #
-        # t_op_start = time.time()
-        # nb, nt, _ = rewards.size()
-        # k = self.args.model_rollout_timesteps
-        #
-        # # apply discounting and sum over episode
-        # coeff = torch.pow(self.args.gamma, torch.arange(0, nt).float()).expand(nb, nt).to(self.device)
-        # rewards = torch.mul(rewards.squeeze(), coeff)
-        # G = rewards.sum(dim=1)
-        # #print(f"t={t_start} Returns")
-        # #print(np.histogram(G.flatten().to("cpu")))
-        #
-        # # add action value estimates for non-terminal episodes
-        # if len(active_episodes) > 0:
-        #     t_end = mask.min(dim=1)[1].flatten()
-        #     G[active_episodes] += q_values[active_episodes, t_end[active_episodes]].sum(dim=1).max(dim=1)[0].unsqueeze(dim=1)
-        #
-        # # rank and select action history H by discounted return G
-        # G_ranked = [(i, G[i].item()) for i in range(G.size()[0])]
-        # G_ranked.sort(key=lambda x: x[1], reverse=True)
-        # selected = G_ranked[0]
-        #
-        # H = actions[selected[0]]  # take the best candidate
-        # #G = selected[1] # expected return for this candidate
-        #
-        # return H, rewards[selected[0]]
-
+        #print(self.tree_stats.normalize(root.action_values))
+        action = self.select_action(root, greedy=True)
+        return action
 
     def rollout(self, node, actions):
 
@@ -589,10 +562,8 @@ class ModelMuZeroLearner:
             R = torch.zeros(batch_size, k, self.reward_size).to(self.device) # reward history
             V = torch.zeros(batch_size, k, self.value_size).to(self.device) # n-step return estimate
             Q = torch.zeros(batch_size, k, n_agents, n_actions).to(self.device) # action values
-            H = torch.zeros(batch_size, max_t, n_agents, dtype=torch.int).to(self.device) # action history
-            M = torch.zeros(batch_size, max_t, 1, dtype=torch.bool).to(self.device)  # active episode mask
 
-            print(f"Rolling out {k} timesteps from t={node.t}")
+            #print(f"Rolling out {k} timesteps from t={node.t}")
             for t in range(0, k):
 
                 # choose actions following current policy
@@ -603,7 +574,6 @@ class ModelMuZeroLearner:
 
                 # update action values and action history
                 Q[:, t, ...] = agent_outputs
-                H[:, t, ...] = actions
 
                 # generate next state, reward, termination signal
                 ht, ct = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
@@ -623,16 +593,13 @@ class ModelMuZeroLearner:
                 inactive_episodes = list(set(range(batch_size)) - set(active_episodes))
                 terminated[inactive_episodes] = False
 
-                # mask active episodes
-                M[active_episodes, t] = True
-
                 # if this is the last allowable timestep, terminate
                 if t == max_t - 1:
                     terminated[active_episodes] = True
 
                 # generate and threshold avail_actions
                 avail_actions = self.actions_model(ht).view(batch_size, n_agents, n_actions)
-                avail_actions = (avail_actions > self.args.model_action_threshold).int()
+                # avail_actions = (avail_actions > self.args.model_action_threshold).int()
 
                 # handle cases where no agent actions are available e.g. when agent is dead
                 mask = avail_actions.sum(-1) == 0

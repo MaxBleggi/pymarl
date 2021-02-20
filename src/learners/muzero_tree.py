@@ -1,6 +1,28 @@
 import torch
 import torch.nn.functional as F
 
+class TreeStats():
+    def __init__(self):
+        self.clear()
+
+    def clear(self):
+        self._min = 0
+        self._max = 0
+
+    def update(self, x):
+
+        _max = max(0, x.max())
+        _min = max(0, x.min())
+
+        if _max > self._max:
+            self._max = _max
+        if _min < self._min:
+            self._min = _min
+
+    def normalize(self, x):
+        _range = self._max - self._min + 1e-3
+        return (x - self._min) / _range
+
 class TreeState():
     # this is a set of tensors representing the dynimacis model hidden state, available actions and termination status
     def __init__(self, ht, ct, avail_actions, term_signal):
@@ -42,12 +64,13 @@ class Node():
     def update(self, Q, V, R, terminal, state):
         self.state = state
         self.priors = F.softmax(Q[-1], dim=-1)
-        self.action_values = Q[-1]
+        # self.action_values = Q[-1]
         self.value = V[-1].item()
         self.reward = R[-1].item()
         self.terminal = terminal[-1].item()
 
     def backup(self, action, G):
+        self.action_values = ((self.child_visits * self.action_values) + G) / (self.child_visits + 1)
         self.child_visits.scatter_add_(1, torch.tensor([action], device=self.device).view(-1, 1), torch.ones(self.action_space, device=self.device))
         self.count += 1
 
