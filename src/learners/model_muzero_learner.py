@@ -390,13 +390,42 @@ class ModelMuZeroLearner:
         """
         use tree policy to select a child via max ucb
         """
-        action = self.select_action(parent, greedy=True)
+        action = self.select_ucb_action(parent)
         key = tuple(action.flatten().cpu().tolist())
         #print('selecting greedy action', key)
         if key in parent.children:
             return parent.children[key]
         else:
-            return None
+            if len(parent.children) > 0:
+                print(f"new action selected from {parent.name}")
+            child = Node(key, self.action_space, action=action, t=parent.t+1, device=self.device)
+            parent.add_child(key, child)
+            return child
+
+    def select_ucb_action(self, parent):
+        """
+        UCB action selection
+        """
+        device = self.device
+        c1 = self.args.ucb_c1
+        c2 = self.args.ucb_c2
+        batch_size = self.args.model_rollout_batch_size
+
+        parent_count = torch.ones(self.action_space, device=device) * parent.count
+        visit_ratio = torch.sqrt(parent_count) / (1 + parent.child_visits)
+        c2_ratio = (parent_count + c2 + 1) / c2
+        prior_scores = parent.priors * visit_ratio * (c1 + torch.log(c2_ratio)) if parent.count > 0 else parent.priors
+
+        value_scores = self.tree_stats.normalize(parent.action_values)
+        scores = prior_scores + value_scores
+        scores = scores.repeat(batch_size, 1, 1)
+
+        # scores[parent.state.avail_actions == 0.0] = -float("inf")
+        # adjust according to likelihood of actions being available
+        scores = scores * parent.state.avail_actions
+        selected_actions = torch.argmax(scores, dim=-1)
+
+        return selected_actions
 
     def select_action(self, parent, t_env=0, greedy=False):
         """
@@ -409,23 +438,15 @@ class ModelMuZeroLearner:
 
         parent_count = torch.ones(self.action_space, device=device) * parent.count
         visit_ratio = torch.sqrt(parent_count) / (1 + parent.child_visits)
-        # print('visit ratio')
-        # print(visit_ratio)
-
         c2_ratio = (parent_count + c2 + 1) / c2
-        # print('c2 ratio')
-        # print(c2_ratio)
+        prior_scores = parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
 
-        nq = self.tree_stats.normalize(parent.action_values)
-        scores =  nq if greedy else nq + parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
+        value_scores = self.tree_stats.normalize(parent.action_values)
+        scores = prior_scores + value_scores
         scores = scores.repeat(batch_size, 1, 1)
-        # print('scores')
-        # print(scores)
 
-        #selected_actions = torch.argmax(scores, dim=1)
-        selected_actions = self.model_mac.select_actions(scores, parent.state.avail_actions, t_env=t_env, greedy=greedy)
-        # print('selected actions')
-        # print(selected_actions)
+        avail_actions = (parent.state.avail_actions > self.args.model_action_threshold).int()
+        selected_actions = self.model_mac.select_actions(scores, avail_actions, t_env=t_env, greedy=greedy)
 
         return selected_actions
 
@@ -435,9 +456,11 @@ class ModelMuZeroLearner:
             batch.to(self.device)
 
         batch_size = self.args.model_rollout_batch_size
+        n_agents, n_actions = self.action_space
 
         self.representation_model.eval()
         self.dynamics_model.eval()
+        self.policy_model.eval()
 
         with torch.no_grad():
 
@@ -458,34 +481,32 @@ class ModelMuZeroLearner:
             # initialise dynamics model hidden state
             _, ct = self.dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
 
-        return TreeState(ht, ct, avail_actions, term_signal)
+            # initialise root node policy
+            Q = torch.zeros(batch_size, 1, n_agents, n_actions).to(self.device)
+            Q[:, 0, ...] = self.policy_model(ht).view(batch_size, n_agents, n_actions)
+            initial_priors = F.softmax(Q[-1], dim=-1)
 
-    def expand_node(self, parent, t_env):
-        # select a joint action and add it to the set of children
-        action = self.select_action(parent, t_env=t_env)
-        key = tuple(action.flatten().cpu().tolist())
-        action = action.repeat(self.args.model_rollout_batch_size, 1)
-        # child = self.simulate(parent, action)
 
-        # simulate and store results in new child node
-        child = Node(key, self.action_space, t=parent.t+1, device=self.device)
-        Q, V, R, terminal, state = self.rollout(parent, action)
-        self.tree_stats.update(Q)
-        child.update(Q, V, R, terminal, state)
-        parent.add_child(key, child)
+        return initial_priors, TreeState(ht, ct, avail_actions, term_signal)
 
-        return child
+    def expand_node(self, node):
+        action = node.action.repeat(self.args.model_rollout_batch_size, 1)
+        Q, V, R, terminal, state = self.rollout(node.parent, action)
+        node.update(Q, V, R, terminal, state)
+        node.expanded = True
 
     def backup(self, history):
+        #print(len(history))
         i = len(history) - 1
         leaf, _ = history.pop(0)
-        G = (self.args.gamma ** i) * (leaf.reward + leaf.value) # todo: do we double count rt ?
+        G = (self.args.gamma ** i) + leaf.value # todo: do we double count rt ?
 
         i -= 1
         for node, action in history:
             G += (self.args.gamma ** i) * node.reward
             #print(f" -- {str(node)}, {action}, r={node.reward}, i={i}, G={G}")
             node.backup(action, G)
+            self.tree_stats.update(G)
             i -= 1
 
     def add_exploration_noise(self, x):
@@ -500,37 +521,38 @@ class ModelMuZeroLearner:
 
         # initialise root node
         root = Node('root', self.action_space, t=t_start, device=self.device)
-        root.state = self.initialise(batch, t_start) # TODO these tensors might need to be held in CPU memory
-        root.priors = self.add_exploration_noise(root.priors)
+        initial_priors, root.state = self.initialise(batch, t_start)
+        root.priors = self.add_exploration_noise(initial_priors)
+        root.expanded = True
 
         # run mcts
         for i in range(n_sim):
             #print(f"Simulation {i + 1}")
-            parent = child = root
+            child = parent = root
             depth = 0
             history = []
 
-            while child:
+            while parent.expanded:
                 # execute tree policy
-                #print(f"depth: {depth}: {parent}")
                 child = self.select_child(parent)
-                if child:
-                    history.append((parent, child.name))
-                    parent = child
+                print(f"depth={depth}, parent={parent.name}, action={child.action.flatten().tolist()}")
+                history.append((parent, child.name))
+                parent = child
+                depth += 1
 
             # expand current node
-            child = self.expand_node(parent, t_env)
-            history.append((parent, child.name))
+            self.expand_node(child)
             history.append((child, None))
-            #print(f"expanded {parent.name} -> {child.name}")
 
             #print('backup ...')
             history.reverse()
             self.backup(history)
             #print("")
+            print("----------------------------------------------")
 
-        #print(self.tree_stats.normalize(root.action_values))
+        # select greedy action
         action = self.select_action(root, greedy=True)
+        # root.summary()
         return action
 
     def rollout(self, node, actions):
@@ -583,6 +605,7 @@ class ModelMuZeroLearner:
                 # generate next state, reward, termination signal
                 ht, ct = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
                 reward = self.reward_model(ht)
+                value = self.value_model(ht)
                 term_signal = self.term_model(ht)
 
                 # # clamp reward
@@ -590,6 +613,7 @@ class ModelMuZeroLearner:
 
                 # record timestep reward
                 R[:, t, :] = reward
+                V[:, t, :] = value
 
                 # generate termination mask
                 terminated = (term_signal > self.args.model_term_threshold)

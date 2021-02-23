@@ -11,17 +11,14 @@ class TreeStats():
 
     def update(self, x):
 
-        _max = max(0, x.max())
-        _min = max(0, x.min())
-
-        if _max > self._max:
-            self._max = _max
-        if _min < self._min:
-            self._min = _min
+        self._max = max(self._max, x)
+        self._min = min(self._min, x)
 
     def normalize(self, x):
-        _range = self._max - self._min + 1e-3
-        return (x - self._min) / _range
+        if self._max > self._min:
+            return (x - self._min) / (self._max - self._min)
+        else:
+            return x
 
 class TreeState():
     # this is a set of tensors representing the dynimacis model hidden state, available actions and termination status
@@ -45,6 +42,8 @@ class Node():
         self.device = device
 
         self.t = t  # timestep represented by this node
+        self.parent = None
+        self.action = action
         self.children = {} # each possible joint action is recorded as a separate child
         self.state = None # TreeState
         self.priors = torch.zeros(self.action_space, device=device)
@@ -54,12 +53,12 @@ class Node():
         self.value = 0
         self.count = 0
         self.terminal = False
+        self.expanded = False
 
-    def visit(self):
-        self.count += 1
 
     def add_child(self, action, child):
         self.children[action] = child
+        child.parent = self
 
     def update(self, Q, V, R, terminal, state):
         self.state = state
@@ -70,10 +69,19 @@ class Node():
         self.terminal = terminal[-1].item()
 
     def backup(self, action, G):
-        self.action_values = ((self.child_visits * self.action_values) + G) / (self.child_visits + 1)
-        self.child_visits.scatter_add_(1, torch.tensor([action], device=self.device).view(-1, 1), torch.ones(self.action_space, device=self.device))
+        # binary matrix representing action mask
+        visit = torch.zeros_like(self.child_visits).scatter_add_(1, torch.tensor([action], device=self.device).view(-1, 1),
+                                       torch.ones(self.action_space, device=self.device))
+        self.action_values = ((self.child_visits * self.action_values) + G * visit) / (self.child_visits + 1)
+        self.child_visits += visit
+
         self.count += 1
 
+    def summary(self):
+        print(self.name)
+        for action, child in self.children.items():
+            print(f" -- {str(child)}")
+        print("-----------------------------------------------------------")
 
     def __str__(self):
-        return f"name: {self.name}, t: {self.t}, count: {self.count}"
+        return f"name={self.name}, t={self.t}, count={self.count}, reward={self.reward:.2f}, value={self.value:.2f}"
