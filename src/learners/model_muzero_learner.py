@@ -425,28 +425,33 @@ class ModelMuZeroLearner:
         scores = scores * parent.state.avail_actions
         selected_actions = torch.argmax(scores, dim=-1)
 
+        # print(f"parent={parent.name}")
+        # print(f"priors=\n{parent.priors.view(self.action_space)}")
+        # print(f"prior_score=\n{prior_scores.view(self.action_space)}")
+        # print(f"value_score=\n{value_scores.view(self.action_space)}")
+        # print(f"avail_actions=\n{parent.state.avail_actions.view(self.action_space)}")
+        # print(f"score=\n{scores.view(self.action_space)}")
+        # print(f"selected_actions={selected_actions.flatten().cpu().tolist()}")
+        # print("")
+
+
         return selected_actions
 
     def select_action(self, parent, t_env=0, greedy=False):
         """
-        UCB action selection
+        Temperature based action selection based on visit count
         """
         device = self.device
-        c1 = self.args.ucb_c1
-        c2 = self.args.ucb_c2
         batch_size = self.args.model_rollout_batch_size
 
-        parent_count = torch.ones(self.action_space, device=device) * parent.count
-        visit_ratio = torch.sqrt(parent_count) / (1 + parent.child_visits)
-        c2_ratio = (parent_count + c2 + 1) / c2
-        prior_scores = parent.priors * visit_ratio * (c1 + torch.log(c2_ratio))
+        counts = parent.child_visits.repeat(batch_size, 1, 1)
 
-        value_scores = self.tree_stats.normalize(parent.action_values)
-        scores = prior_scores + value_scores
-        scores = scores.repeat(batch_size, 1, 1)
+        avail_actions = parent.state.avail_actions
+        selected_actions = self.model_mac.select_actions(counts, avail_actions, t_env=t_env, greedy=greedy)
 
-        avail_actions = (parent.state.avail_actions > self.args.model_action_threshold).int()
-        selected_actions = self.model_mac.select_actions(scores, avail_actions, t_env=t_env, greedy=greedy)
+        print(f"name={parent.name}, counts={counts.view(self.action_space)}")
+        print(f"avail_actions={parent.state.avail_actions.view(self.action_space)}")
+        print(f"selected_action={selected_actions}")
 
         return selected_actions
 
@@ -485,7 +490,6 @@ class ModelMuZeroLearner:
             Q = torch.zeros(batch_size, 1, n_agents, n_actions).to(self.device)
             Q[:, 0, ...] = self.policy_model(ht).view(batch_size, n_agents, n_actions)
             initial_priors = F.softmax(Q[-1], dim=-1)
-
 
         return initial_priors, TreeState(ht, ct, avail_actions, term_signal)
 
@@ -551,7 +555,7 @@ class ModelMuZeroLearner:
             print("----------------------------------------------")
 
         # select greedy action
-        action = self.select_action(root, greedy=True)
+        action = self.select_action(root, t_env=t_env, greedy=False)
         # root.summary()
         return action
 

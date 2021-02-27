@@ -105,9 +105,11 @@ class MuZeroActionSelector():
         self.greedy_epsilon = 1e-3
 
     def select_action(self, agent_inputs, avail_actions, t_env, greedy=False):
+
         masked_policies = agent_inputs.clone()
+        masked_policies[avail_actions == 0.0] = -float("inf")
+
         if greedy:
-            masked_policies[avail_actions == 0.0] = -float("inf")
             self.epsilon = self.greedy_epsilon
         else:
             self.epsilon = self.schedule.eval(t_env)
