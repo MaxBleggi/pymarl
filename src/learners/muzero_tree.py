@@ -22,15 +22,14 @@ class TreeStats():
 
 class TreeState():
     # this is a set of tensors representing the dynimacis model hidden state, available actions and termination status
-    def __init__(self, ht, ct, avail_actions, term_signal):
+    def __init__(self, ht, ct, avail_actions):
 
         self.ht = ht
         self.ct = ct
         self.avail_actions = avail_actions
-        self.term_signal = term_signal
 
     def totuple(self):
-        return (self.ht, self.ct, self.avail_actions, self.term_signal)
+        return (self.ht, self.ct, self.avail_actions)
 
 class Node():
 
@@ -52,27 +51,29 @@ class Node():
         self.reward = 0
         self.value = 0
         self.count = 0
-        self.terminal = False
         self.expanded = False
+        self.terminated = False
 
 
     def add_child(self, action, child):
         self.children[action] = child
         child.parent = self
 
-    def update(self, Q, V, R, terminal, state):
+    def update(self, policy, value, reward, terminated, state):
         self.state = state
-        self.priors = F.softmax(Q[-1], dim=-1)
+        self.priors = policy[-1]
         # self.action_values = Q[-1]
-        self.value = V[-1].item()
-        self.reward = R[-1].item()
-        self.terminal = terminal[-1].item()
+        self.value = value.item()
+        self.reward = reward.item()
+        self.terminated = terminated
+
 
     def backup(self, action, G):
         # binary matrix representing action mask
         visit = torch.zeros_like(self.child_visits).scatter_add_(1, torch.tensor([action], device=self.device).view(-1, 1),
                                        torch.ones(self.action_space, device=self.device))
-        self.action_values = ((self.child_visits * self.action_values) + G * visit) / (self.child_visits + 1)
+        G_backup = G / self.n_agents
+        self.action_values = ((self.child_visits * self.action_values) + G_backup * visit) / (self.child_visits + 1)
         self.child_visits += visit
 
         self.count += 1
@@ -84,4 +85,4 @@ class Node():
         print("-----------------------------------------------------------")
 
     def __str__(self):
-        return f"name={self.name}, t={self.t}, count={self.count}, reward={self.reward:.2f}, value={self.value:.2f}"
+        return f"name={self.name}, t={self.t}, count={self.count}, reward={self.reward:.2f}, value={self.value:.2f}, term={self.terminated}"

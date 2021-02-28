@@ -94,6 +94,7 @@ def run_sequential(args, logger):
         "obs": {"vshape": env_info["obs_shape"], "group": "agents"},
         "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
         "avail_actions": {"vshape": (env_info["n_actions"],), "group": "agents", "dtype": th.int},
+        "visit_counts": {"vshape": (env_info["n_actions"],), "group": "agents"},
         "reward": {"vshape": (1,)},
         "terminated": {"vshape": (1,), "dtype": th.uint8},
         "battle_won": {"vshape": (1,), "dtype": th.uint8},
@@ -197,19 +198,16 @@ def run_sequential(args, logger):
     # timing operations
     t_op_start = 0
 
-    # model based vars
-    model_trained = False
-
     logger.console_logger.info("Beginning training for {} timesteps".format(args.t_max))
     while runner.t_env <= args.t_max:
 
         t_op_start = time.time()
 
         # if model is available use
-        if args.model_learner and model.trained:
+        if args.model_learner:
             episode_batch, episode_return = runner.run(use_search=args.model_use_search, test_mode=False)
             print(
-                f"SEARCH: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"SEARCH: return {episode_return:.3f} epsilon: {model.model_mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
             episode_batch, episode_return = runner.run(use_search=False, test_mode=False)
             print(
@@ -233,16 +231,14 @@ def run_sequential(args, logger):
 
                 t_op_start = time.time()
                 learner.train(episode_sample, runner.t_env, episode)
-                print(f"RL step: {time.time() - t_op_start: .2f} s")
+                print(f"Training target policy: {time.time() - t_op_start: .2f} s")
 
         if args.model_learner:
-            if buffer.can_sample(args.model_min_samples) and buffer.can_sample(args.model_batch_size):
+            if buffer.can_sample(args.model_min_samples): # and buffer.can_sample(args.model_batch_size):
                 # train environment model
                 t_op_start = time.time()
                 model.train(buffer)
                 model.log_stats(runner.t_env)
-                if not model_trained:
-                    model_trained = True
                 print(f"Model training step: {time.time() - t_op_start: .2f} s")
 
 

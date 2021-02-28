@@ -3,6 +3,7 @@
 #  - gradient tricks (see appendix G)
 #  - prioritised replay
 #  - can probably skip avail_actions model and rely on policy outputs to make invalid actions unlikely
+#  - policy should use KL loss
 
 import time
 import torch
@@ -131,12 +132,13 @@ class ModelMuZeroLearner:
         obs = batch["obs"][:, :-1, ...]  # observations
         aa = batch["avail_actions"][:, :-1, ...].float()  # available actions
         action = batch["actions_onehot"][:, :-1, ...]  # actions taken
+        counts = batch["visit_counts"][:, :-1, ...]  # mcts visit counts
 
         # flatten per-agent quantities
         nbatch, ntimesteps, _, _ = obs.size()
         obs = obs.view((nbatch, ntimesteps, -1))
         aa = aa.view((nbatch, ntimesteps, -1))
-        action = action.view(nbatch, ntimesteps, -1)
+        action = action.view((nbatch, ntimesteps, -1))
 
         # state
         state = batch["state"][:, :-1, :]
@@ -166,11 +168,14 @@ class ModelMuZeroLearner:
             mask[i, :term_idx[i] + 1] = 1
 
         # generate current policy outputs
-        policy = torch.zeros_like(action)
-        with torch.no_grad():
-            self.target_mac.init_hidden(nbatch)
-            for t in range(terminated.size()[1]): # max timesteps
-                policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
+        # use this to approximate target policy
+        # with torch.no_grad():
+        #     self.target_mac.init_hidden(nbatch)
+        #     for t in range(terminated.size()[1]): # max timesteps
+        #         policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
+
+        # otherwise approximate search policy (visit count distribution)
+        policy = torch.softmax(counts, dim=-1).view((nbatch, ntimesteps, -1))
 
         obs *= mask
         aa *= mask
@@ -353,7 +358,7 @@ class ModelMuZeroLearner:
     def train(self, buffer):
 
         # train models
-        batch = buffer.sample(self.args.model_batch_size)
+        batch = buffer.sample(min(buffer.episodes_in_buffer, self.args.model_batch_size))
 
         # Truncate batch to only filled timestep
         max_ep_t = batch.max_t_filled()
@@ -373,7 +378,7 @@ class ModelMuZeroLearner:
         # validate periodically
         if (self.epochs + 1) % self.args.model_log_epochs == 0:
             # validate models
-            batch = buffer.sample(self.args.model_batch_size)
+            batch = buffer.sample(min(buffer.episodes_in_buffer, self.args.model_batch_size))
 
             if batch.device != self.args.device:
                 batch.to(self.args.device)
@@ -396,8 +401,8 @@ class ModelMuZeroLearner:
         if key in parent.children:
             return parent.children[key]
         else:
-            if len(parent.children) > 0:
-                print(f"new action selected from {parent.name}")
+            # if len(parent.children) > 0:
+            #     print(f"new action selected from {parent.name}")
             child = Node(key, self.action_space, action=action, t=parent.t+1, device=self.device)
             parent.add_child(key, child)
             return child
@@ -414,7 +419,8 @@ class ModelMuZeroLearner:
         parent_count = torch.ones(self.action_space, device=device) * parent.count
         visit_ratio = torch.sqrt(parent_count) / (1 + parent.child_visits)
         c2_ratio = (parent_count + c2 + 1) / c2
-        prior_scores = parent.priors * visit_ratio * (c1 + torch.log(c2_ratio)) if parent.count > 0 else parent.priors
+        exploration_bonus = visit_ratio * (c1 + torch.log(c2_ratio)) if parent.count > 0 else 1.0
+        prior_scores = parent.priors * exploration_bonus
 
         value_scores = self.tree_stats.normalize(parent.action_values)
         scores = prior_scores + value_scores
@@ -434,7 +440,6 @@ class ModelMuZeroLearner:
         # print(f"selected_actions={selected_actions.flatten().cpu().tolist()}")
         # print("")
 
-
         return selected_actions
 
     def select_action(self, parent, t_env=0, greedy=False):
@@ -449,9 +454,9 @@ class ModelMuZeroLearner:
         avail_actions = parent.state.avail_actions
         selected_actions = self.model_mac.select_actions(counts, avail_actions, t_env=t_env, greedy=greedy)
 
-        print(f"name={parent.name}, counts={counts.view(self.action_space)}")
-        print(f"avail_actions={parent.state.avail_actions.view(self.action_space)}")
-        print(f"selected_action={selected_actions}")
+        # print(f"name={parent.name}, counts={counts.view(self.action_space)}")
+        # print(f"avail_actions={parent.state.avail_actions.view(self.action_space)}")
+        # print(f"selected_action={selected_actions}")
 
         return selected_actions
 
@@ -473,12 +478,10 @@ class ModelMuZeroLearner:
             start_s = max(0, t_start - self.args.model_state_prior_steps)
             state = batch["state"][:, start_s:t_start+1, :self.state_size]
             avail_actions = batch["avail_actions"][:, t_start]
-            term_signal = batch["terminated"][:, t_start].float()
 
             # expand starting states into batch size
             state = state.repeat(batch_size, 1, 1)
             avail_actions = avail_actions.repeat(batch_size, 1, 1)
-            term_signal = term_signal.repeat(batch_size, 1)
 
             # generate implicit state
             ht = self.representation_model(state)
@@ -487,16 +490,14 @@ class ModelMuZeroLearner:
             _, ct = self.dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
 
             # initialise root node policy
-            Q = torch.zeros(batch_size, 1, n_agents, n_actions).to(self.device)
-            Q[:, 0, ...] = self.policy_model(ht).view(batch_size, n_agents, n_actions)
-            initial_priors = F.softmax(Q[-1], dim=-1)
+            initial_priors = self.policy_model(ht).view(batch_size, n_agents, n_actions)
 
-        return initial_priors, TreeState(ht, ct, avail_actions, term_signal)
+        return initial_priors, TreeState(ht, ct, avail_actions)
 
     def expand_node(self, node):
         action = node.action.repeat(self.args.model_rollout_batch_size, 1)
-        Q, V, R, terminal, state = self.rollout(node.parent, action)
-        node.update(Q, V, R, terminal, state)
+        policy, value, reward, terminated, state = self.rollout(node.parent, action)
+        node.update(policy, value, reward, terminated, state)
         node.expanded = True
 
     def backup(self, history):
@@ -530,7 +531,10 @@ class ModelMuZeroLearner:
         root.expanded = True
 
         # run mcts
+        debug = True
         for i in range(n_sim):
+            if i == n_sim - 1:
+                debug = True
             #print(f"Simulation {i + 1}")
             child = parent = root
             depth = 0
@@ -539,36 +543,33 @@ class ModelMuZeroLearner:
             while parent.expanded:
                 # execute tree policy
                 child = self.select_child(parent)
-                print(f"depth={depth}, parent={parent.name}, action={child.action.flatten().tolist()}")
+                if debug:
+                    print(f"depth={depth}, parent={parent.name}, action={child.action.flatten().tolist()}, term={parent.terminated}")
                 history.append((parent, child.name))
                 parent = child
                 depth += 1
 
             # expand current node
-            self.expand_node(child)
-            history.append((child, None))
+            if not child.parent.terminated:
+                self.expand_node(child)
+                history.append((child, None))
 
-            #print('backup ...')
             history.reverse()
             self.backup(history)
-            #print("")
-            print("----------------------------------------------")
+            if debug:
+                print("----------------------------------------------")
 
         # select greedy action
         action = self.select_action(root, t_env=t_env, greedy=False)
         # root.summary()
-        return action
+        # print(root.child_visits)
+        # print(action.tolist())
+        return action, root.child_visits
 
     def rollout(self, node, actions):
 
-        # preform model based rollout from the current node
+        ht, ct, avail_actions = node.state.totuple()
 
-        # get the current state variables and transfer to the correct device if necessary
-        # batch = node.batch
-        # for b in batch:
-        #     if b.device != self.device:
-        #         b.to(self.device)
-        ht, ct, avail_actions, term_signal = node.state.totuple()
         batch_size = self.args.model_rollout_batch_size
         n_agents, n_actions = self.action_space
 
@@ -581,71 +582,35 @@ class ModelMuZeroLearner:
 
         with torch.no_grad():
 
-            # track active episodes
-            terminated = (term_signal > 0)
-            active_episodes = [i for i, finished in enumerate(terminated.flatten()) if not finished]
+            # generate next state, reward, termination signal
+            actions_onehot = F.one_hot(actions, num_classes=n_actions)
+            ht, ct = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
+            reward = self.reward_model(ht)
+            value = self.value_model(ht)
+            term_signal = self.term_model(ht)
+            policy = self.policy_model(ht).view(batch_size, n_agents, n_actions)
 
-            # set the number of rollout timesteps
-            max_t = self.args.episode_limit - node.t - 1
-            # k = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else max_t
-            k = 1
+            # # clamp reward
+            # reward[reward < 0] = 0
 
-            R = torch.zeros(batch_size, k, self.reward_size).to(self.device) # reward history
-            V = torch.zeros(batch_size, k, self.value_size).to(self.device) # n-step return estimate
-            Q = torch.zeros(batch_size, k, n_agents, n_actions).to(self.device) # action values
+            # generate termination mask
+            terminated = (term_signal > self.args.model_term_threshold).item()
 
-            #print(f"Rolling out {k} timesteps from t={node.t}")
-            for t in range(0, k):
+            # if this is the last allowable timestep, terminate
+            if node.t == self.args.episode_limit - 1:
+                terminated = True
 
-                # choose actions following current policy
-                agent_outputs = self.policy_model(ht).view(batch_size, n_agents, n_actions)
+            # generate and threshold avail_actions
+            avail_actions = self.actions_model(ht).view(batch_size, n_agents, n_actions)
+            # avail_actions = (avail_actions > self.args.model_action_threshold).int()
 
-                #actions = self.model_mac.select_actions(agent_outputs, avail_actions)
-                actions_onehot = F.one_hot(actions, num_classes=n_actions)
+            # handle cases where no agent actions are available e.g. when agent is dead
+            mask = avail_actions.sum(-1) == 0
+            source = torch.zeros_like(avail_actions)
+            source[:, :, 0] = 1  # enable no-op
+            avail_actions[mask] = source[mask]
 
-                # update action values and action history
-                Q[:, t, ...] = agent_outputs
-
-                # generate next state, reward, termination signal
-                ht, ct = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
-                reward = self.reward_model(ht)
-                value = self.value_model(ht)
-                term_signal = self.term_model(ht)
-
-                # # clamp reward
-                # reward[reward < 0] = 0
-
-                # record timestep reward
-                R[:, t, :] = reward
-                V[:, t, :] = value
-
-                # generate termination mask
-                terminated = (term_signal > self.args.model_term_threshold)
-
-                # mask previously terminated episodes to avoid reactivatation
-                inactive_episodes = list(set(range(batch_size)) - set(active_episodes))
-                terminated[inactive_episodes] = False
-
-                # if this is the last allowable timestep, terminate
-                if t == max_t - 1:
-                    terminated[active_episodes] = True
-
-                # generate and threshold avail_actions
-                avail_actions = self.actions_model(ht).view(batch_size, n_agents, n_actions)
-                # avail_actions = (avail_actions > self.args.model_action_threshold).int()
-
-                # handle cases where no agent actions are available e.g. when agent is dead
-                mask = avail_actions.sum(-1) == 0
-                source = torch.zeros_like(avail_actions)
-                source[:, :, 0] = 1  # enable no-op
-                avail_actions[mask] = source[mask]
-
-                # update active episodes
-                active_episodes = [i for i, finished in enumerate(terminated[active_episodes].flatten()) if not finished]
-                if all(terminated):
-                    break
-
-            return Q, V, R, terminated, TreeState(ht, ct, avail_actions, term_signal)
+            return policy, value, reward, terminated, TreeState(ht, ct, avail_actions)
 
     def cuda(self):
         if self.dynamics_model:
