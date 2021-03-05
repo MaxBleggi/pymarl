@@ -18,6 +18,7 @@ from modules.models.reward import RewardModel
 from modules.models.term import TermModel
 from modules.models.value import ValueModel
 
+import copy
 import numpy as np
 import random
 from envs import REGISTRY as env_REGISTRY
@@ -93,6 +94,9 @@ class ModelMuZeroLearner:
         
         self.optimizer = torch.optim.Adam(self.params, lr=self.args.model_learning_rate)
 
+        # create copies fo the models to use for generating training data
+        self._update_target_models()
+
         # logging stats
         self.train_loss, self.val_loss = 0, 0
         self.train_r_loss, self.val_r_loss = 0, 0
@@ -106,6 +110,7 @@ class ModelMuZeroLearner:
 
         self.epochs = 0
         self.save_index = 0
+        self.training_steps = 0
 
         self.tree_stats = TreeStats()
         self.trained = False
@@ -122,6 +127,16 @@ class ModelMuZeroLearner:
                     os.mkdir(self.args.episode_dir)
             else:
                 raise Exception("Please specify 'episode_dir' or set 'save_episodes' to False")
+
+    def _update_target_models(self):
+        self.target_dynamics_model = copy.deepcopy(self.dynamics_model)
+        self.target_representation_model = copy.deepcopy(self.representation_model)
+        self.target_policy_model = copy.deepcopy(self.policy_model)
+        self.target_reward_model = copy.deepcopy(self.reward_model)
+        self.target_value_model = copy.deepcopy(self.value_model)
+        self.target_actions_model = copy.deepcopy(self.actions_model)
+        self.target_term_model = copy.deepcopy(self.term_model)
+        print("Update mcts target models")
 
     def get_episode_vars(self, batch):
 
@@ -151,11 +166,11 @@ class ModelMuZeroLearner:
         # value ie. n-step return
         value = torch.zeros_like(reward)
         n = self.args.model_bootstrap_timesteps
-        coeff = torch.pow(self.args.gamma, torch.arange(0, n).float()).expand(nbatch, n).unsqueeze(-1).to(value.device)
+        coeff = torch.pow(self.args.gamma, torch.arange(0, n+1).float()).expand(nbatch, n+1).unsqueeze(-1).to(value.device)
         for i in range(0, ntimesteps):                
-            r = reward[:, i + 1:i + n + 1]
+            r = reward[:, i : i + n + 1]
             c = coeff[:, :r.size()[1]]        
-            # value[:, i] = torch.mul(r, c).sum(dim=1)
+            value[:, i] = torch.mul(r, c).sum(dim=1)
             value[:, i] = r.sum(dim=1)
 
         # termination signal
@@ -176,6 +191,7 @@ class ModelMuZeroLearner:
 
         # otherwise approximate search policy (visit count distribution)
         policy = torch.softmax(counts, dim=-1).view((nbatch, ntimesteps, -1))
+        # policy = counts.view((nbatch, ntimesteps, -1))
 
         obs *= mask
         aa *= mask
@@ -369,6 +385,7 @@ class ModelMuZeroLearner:
 
         vars = self.get_episode_vars(batch)
         self._train(vars, max_ep_t)
+        self.training_steps += 1
 
         if not self.trained:
             self.trained = True
@@ -390,6 +407,12 @@ class ModelMuZeroLearner:
             self._validate(vars)
 
             self.epochs = 0
+
+        # update targets
+        # update target models if needed
+        if self.training_steps == self.args.mcts_update_interval:
+            self._update_target_models()
+            self.training_steps = 0
 
     def select_child(self, parent):
         """
@@ -468,9 +491,9 @@ class ModelMuZeroLearner:
         batch_size = self.args.model_rollout_batch_size
         n_agents, n_actions = self.action_space
 
-        self.representation_model.eval()
-        self.dynamics_model.eval()
-        self.policy_model.eval()
+        self.target_representation_model.eval()
+        self.target_dynamics_model.eval()
+        self.target_policy_model.eval()
 
         with torch.no_grad():
 
@@ -484,13 +507,15 @@ class ModelMuZeroLearner:
             avail_actions = avail_actions.repeat(batch_size, 1, 1)
 
             # generate implicit state
-            ht = self.representation_model(state)
+            ht = self.target_representation_model(state)
 
             # initialise dynamics model hidden state
-            _, ct = self.dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
+            _, ct = self.target_dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
 
             # initialise root node policy
             initial_priors = self.policy_model(ht).view(batch_size, n_agents, n_actions)
+            initial_priors = self.add_exploration_noise(initial_priors, avail_actions)
+            initial_priors = initial_priors * avail_actions
 
         return initial_priors, TreeState(ht, ct, avail_actions)
 
@@ -501,22 +526,22 @@ class ModelMuZeroLearner:
         node.expanded = True
 
     def backup(self, history):
-        #print(len(history))
-        i = len(history) - 1
+        # print(f"backup history length={len(history)}")
         leaf, _ = history.pop(0)
-        G = (self.args.gamma ** i) + leaf.value # todo: do we double count rt ?
+        G = leaf.value # discounted n-step return from the leaf node
+        # print(f"V={G}")
 
-        i -= 1
+        i = max(0, len(history) - 2)
         for node, action in history:
             G += (self.args.gamma ** i) * node.reward
-            #print(f" -- {str(node)}, {action}, r={node.reward}, i={i}, G={G}")
+            # print(f" -- {str(node)}, {action}, r={node.reward}, i={i}, G={G}")
             node.backup(action, G)
             self.tree_stats.update(G)
             i -= 1
 
-    def add_exploration_noise(self, x):
-        m = Dirichlet(torch.ones_like(x) * self.args.model_dirichlet_alpha)
-        return x + m.sample()
+    def add_exploration_noise(self, values, mask):
+        noise = Dirichlet(mask.clone() * self.args.model_dirichlet_alpha)
+        return values + noise.sample()
 
     def mcts(self, batch, t_env, t_start):
 
@@ -527,14 +552,15 @@ class ModelMuZeroLearner:
         # initialise root node
         root = Node('root', self.action_space, t=t_start, device=self.device)
         initial_priors, root.state = self.initialise(batch, t_start)
-        root.priors = self.add_exploration_noise(initial_priors)
+        # print(f"initial_priors={initial_priors}")
+        root.priors = initial_priors
         root.expanded = True
 
         # run mcts
-        debug = True
+        debug = False
         for i in range(n_sim):
             if i == n_sim - 1:
-                debug = True
+                debug = False
             #print(f"Simulation {i + 1}")
             child = parent = root
             depth = 0
@@ -562,6 +588,7 @@ class ModelMuZeroLearner:
         # select greedy action
         action = self.select_action(root, t_env=t_env, greedy=False)
         # root.summary()
+        # print(root.state.avail_actions)
         # print(root.child_visits)
         # print(action.tolist())
         return action, root.child_visits
@@ -573,22 +600,22 @@ class ModelMuZeroLearner:
         batch_size = self.args.model_rollout_batch_size
         n_agents, n_actions = self.action_space
 
-        self.dynamics_model.eval()
-        self.actions_model.eval()
-        self.policy_model.eval()
-        self.reward_model.eval()
-        self.term_model.eval()
-        self.value_model.eval()
+        self.target_dynamics_model.eval()
+        self.target_actions_model.eval()
+        self.target_policy_model.eval()
+        self.target_reward_model.eval()
+        self.target_term_model.eval()
+        self.target_value_model.eval()
 
         with torch.no_grad():
 
             # generate next state, reward, termination signal
             actions_onehot = F.one_hot(actions, num_classes=n_actions)
-            ht, ct = self.dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
-            reward = self.reward_model(ht)
-            value = self.value_model(ht)
-            term_signal = self.term_model(ht)
-            policy = self.policy_model(ht).view(batch_size, n_agents, n_actions)
+            ht, ct = self.target_dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
+            reward = self.target_reward_model(ht)
+            value = self.target_value_model(ht)
+            term_signal = self.target_term_model(ht)
+            policy = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
 
             # # clamp reward
             # reward[reward < 0] = 0
@@ -601,7 +628,7 @@ class ModelMuZeroLearner:
                 terminated = True
 
             # generate and threshold avail_actions
-            avail_actions = self.actions_model(ht).view(batch_size, n_agents, n_actions)
+            avail_actions = self.target_actions_model(ht).view(batch_size, n_agents, n_actions)
             # avail_actions = (avail_actions > self.args.model_action_threshold).int()
 
             # handle cases where no agent actions are available e.g. when agent is dead
@@ -627,6 +654,8 @@ class ModelMuZeroLearner:
             self.term_model.cuda()
         if self.value_model:
             self.value_model.cuda()
+
+        self._update_target_models()
 
     def log_stats(self, t_env):
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
