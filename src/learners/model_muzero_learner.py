@@ -166,9 +166,9 @@ class ModelMuZeroLearner:
         # value ie. n-step return
         value = torch.zeros_like(reward)
         n = self.args.model_bootstrap_timesteps
-        coeff = torch.pow(self.args.gamma, torch.arange(0, n+1).float()).expand(nbatch, n+1).unsqueeze(-1).to(value.device)
+        coeff = torch.pow(self.args.gamma, torch.arange(0, n).float()).expand(nbatch, n).unsqueeze(-1).to(value.device)
         for i in range(0, ntimesteps):                
-            r = reward[:, i : i + n + 1]
+            r = reward[:, i : i + n]
             c = coeff[:, :r.size()[1]]        
             value[:, i] = torch.mul(r, c).sum(dim=1)
             value[:, i] = r.sum(dim=1)
