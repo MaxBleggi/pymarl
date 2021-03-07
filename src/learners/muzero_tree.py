@@ -48,6 +48,7 @@ class Node():
         self.priors = torch.zeros(self.action_space, device=device)
         self.child_visits = torch.zeros(self.action_space, device=device)
         self.action_values = torch.zeros(self.action_space, device=device)
+        self.child_rewards = torch.zeros(self.action_space, device=device)
         self.reward = 0
         self.value = 0
         self.count = 0
@@ -69,22 +70,20 @@ class Node():
         # print(f"expanded {self.name}, state={self.state}, priors={self.priors}, value={self.value}, reward={self.reward}, term={self.terminated}")
 
 
-    def backup(self, action, G):
+    def backup(self, action, reward, G):
         # binary matrix representing action mask
-        # print(f"backing up {G} to {self.name} via {action}")
         visit = torch.zeros_like(self.child_visits).scatter_add_(1, torch.tensor([action], device=self.device).view(-1, 1),
                                        torch.ones(self.action_space, device=self.device))
-        # print(f"visit={visit}")
-        #G_backup = G / self.n_agents # this could be an issue because normalisation only considers G
-        G_backup = G
 
-        # print(f"backup value={G_backup}")
-        self.action_values = ((self.child_visits * self.action_values) + G_backup * visit) / (self.child_visits + 1)
+        self.action_values = ((self.child_visits * self.action_values) + G * visit) / (self.child_visits + 1)
+        self.child_rewards = ((self.child_visits * self.child_rewards) + reward * visit) / (self.child_visits + 1)
         # print(f"action_values={self.action_values}")
+        # print(f"child_rewards={self.child_rewards}")
         self.child_visits += visit
-        # print(f"child_visits={self.child_visits}")
+        #print(f"child_visits={self.child_visits}")
 
         self.count += 1
+        self.debug_return = G
 
     def summary(self):
         print(self.name)

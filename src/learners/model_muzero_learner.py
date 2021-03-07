@@ -208,13 +208,14 @@ class ModelMuZeroLearner:
         # inputs
         s = state[:, :-1, :]  # state at time t
         a = actions[:, :-1, :]  # joint action at time t
-        av = aa[:, :-1, :]  # available actions at t
-        pt = policy[:, :-1, :] # raw policy outputs at t        
 
         # outputs
         r = reward[:, :-1, :]  # reward at time t+1        
         T = term_signal[:, :-1, :]  # terminated at t+1
-        vt = value[:, :-1, :]  # estimated discounted k-step return at t 
+
+        vt = value[:, 1:, :]  # discounted k-step return at t+1
+        av = aa[:, 1:, :]  # available actions at t+1
+        pt = policy[:, 1:, :] # raw policy outputs at t+1
 
         y = torch.cat((r, T, av, pt, vt), dim=-1)
 
@@ -249,13 +250,14 @@ class ModelMuZeroLearner:
                 ht = self.representation_model(state)
 
             at = actions[:, t, :]
-            avt = self.actions_model(ht)
-            pt = self.policy_model(ht) # TODO this could probably use avt as additional input            
 
-            # step forward
+            # step
             ht, ct = self.dynamics_model(at, (ht, ct))
+
             rt = self.reward_model(ht)            
             Tt = self.term_model(ht)
+            avt = self.actions_model(ht)
+            pt = self.policy_model(ht)
             vt = self.value_model(ht)
 
             yp[:, t, :] = torch.cat((rt, Tt, avt, pt, vt), dim=-1)
@@ -445,7 +447,7 @@ class ModelMuZeroLearner:
         exploration_bonus = visit_ratio * (c1 + torch.log(c2_ratio)) if parent.count > 0 else 1.0
         prior_scores = parent.priors * exploration_bonus
 
-        value_scores = self.tree_stats.normalize(parent.action_values)
+        value_scores = parent.child_rewards + self.args.gamma * self.tree_stats.normalize(parent.action_values)
         scores = prior_scores + value_scores
         scores = scores.repeat(batch_size, 1, 1)
 
@@ -526,18 +528,14 @@ class ModelMuZeroLearner:
         node.expanded = True
 
     def backup(self, history):
-        # print(f"backup history length={len(history)}")
-        leaf, _ = history.pop(0)
-        G = leaf.value # discounted n-step return from the leaf node
-        # print(f"V={G}")
 
-        i = max(0, len(history) - 2)
-        for node, action in history:
-            G += (self.args.gamma ** i) * node.reward
-            # print(f" -- {str(node)}, {action}, r={node.reward}, i={i}, G={G}")
-            node.backup(action, G)
+        G = history[0][1].value # leaf value
+        for parent, child in history:
+            # print(f"backing up G={G} + r={child.reward} from {child.name} to {parent.name}")
+            G = child.reward + self.args.gamma * G
+            parent.backup(child.name, child.reward, G)
             self.tree_stats.update(G)
-            i -= 1
+        # print(f"Backup finished at {history[-1][0].name} with G={history[-1][0].debug_return}")
 
     def add_exploration_noise(self, values, mask):
         noise = Dirichlet(mask.clone() * self.args.model_dirichlet_alpha)
@@ -559,8 +557,6 @@ class ModelMuZeroLearner:
         # run mcts
         debug = False
         for i in range(n_sim):
-            if i == n_sim - 1:
-                debug = False
             #print(f"Simulation {i + 1}")
             child = parent = root
             depth = 0
@@ -571,26 +567,28 @@ class ModelMuZeroLearner:
                 child = self.select_child(parent)
                 if debug:
                     print(f"depth={depth}, parent={parent.name}, action={child.action.flatten().tolist()}, term={parent.terminated}")
-                history.append((parent, child.name))
+                history.append((parent, child))
                 parent = child
                 depth += 1
 
             # expand current node
             if not child.parent.terminated:
                 self.expand_node(child)
-                history.append((child, None))
 
             history.reverse()
             self.backup(history)
+            #print(f"expected={expected_return}, backup={root.debug_return}")
             if debug:
                 print("----------------------------------------------")
 
         # select greedy action
         action = self.select_action(root, t_env=t_env, greedy=False)
         # root.summary()
-        # print(root.state.avail_actions)
-        # print(root.child_visits)
-        # print(action.tolist())
+        # print("aa=", root.state.avail_actions)
+        # print("visits=", root.child_visits)
+        # print("rewards=", root.child_rewards)
+        # print("values=", root.action_values)
+        # print("selected=", action.flatten().tolist())
         return action, root.child_visits
 
     def rollout(self, node, actions):
@@ -611,11 +609,16 @@ class ModelMuZeroLearner:
 
             # generate next state, reward, termination signal
             actions_onehot = F.one_hot(actions, num_classes=n_actions)
+
+            # step environment
             ht, ct = self.target_dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
+
+            # post transition predictions
             reward = self.target_reward_model(ht)
             value = self.target_value_model(ht)
             term_signal = self.target_term_model(ht)
             policy = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
+
 
             # # clamp reward
             # reward[reward < 0] = 0
