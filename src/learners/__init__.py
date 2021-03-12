@@ -5,6 +5,7 @@ from .simple_learner import SimPLeLearner
 from .model_learner import ModelLearner
 from .model_mcts_learner import ModelMCTSLearner
 from .model_muzero_learner import ModelMuZeroLearner
+from .muzero_learner import MuZeroLearner
 
 REGISTRY = {}
 
@@ -15,3 +16,4 @@ REGISTRY["simple_learner"] = SimPLeLearner
 REGISTRY["mbe"] = ModelLearner
 REGISTRY["model_mcts"] = ModelMCTSLearner
 REGISTRY["model_muzero"] = ModelMuZeroLearner
+REGISTRY["muzero"] = ModelMuZeroLearner
