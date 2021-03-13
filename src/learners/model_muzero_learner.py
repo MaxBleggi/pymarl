@@ -147,7 +147,7 @@ class ModelMuZeroLearner:
         obs = batch["obs"][:, :-1, ...]  # observations
         aa = batch["avail_actions"][:, :-1, ...].float()  # available actions
         action = batch["actions_onehot"][:, :-1, ...]  # actions taken
-        counts = batch["visit_counts"][:, :-1, ...]  # mcts visit counts
+        mcts_policy = batch["mcts_policy"][:, :-1, ...]  # mcts visit counts
 
         # flatten per-agent quantities
         nbatch, ntimesteps, _, _ = obs.size()
@@ -182,16 +182,16 @@ class ModelMuZeroLearner:
             term_signal[i, :term_idx[i]] = 0
             mask[i, :term_idx[i] + 1] = 1
 
-        # generate current policy outputs
+        # generate target policy outputs
         # use this to approximate target policy
         # with torch.no_grad():
         #     self.target_mac.init_hidden(nbatch)
         #     for t in range(terminated.size()[1]): # max timesteps
         #         policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
 
-        # otherwise approximate search policy (visit count distribution)
-        policy = torch.softmax(counts, dim=-1).view((nbatch, ntimesteps, -1))
-        # policy = counts.view((nbatch, ntimesteps, -1))
+        # otherwise approximate behaviour policy
+        policy = torch.softmax(mcts_policy, dim=-1).view((nbatch, ntimesteps, -1))
+        # policy = mcts_policy.view((nbatch, ntimesteps, -1))
 
         obs *= mask
         aa *= mask
@@ -515,7 +515,10 @@ class ModelMuZeroLearner:
             _, ct = self.target_dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
 
             # initialise root node policy
-            initial_priors = self.policy_model(ht).view(batch_size, n_agents, n_actions)
+            initial_priors = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
+            if t_start == 0:
+                print("priors=", initial_priors)
+
             initial_priors = self.add_exploration_noise(initial_priors, avail_actions)
             initial_priors = initial_priors * avail_actions
 
@@ -583,13 +586,20 @@ class ModelMuZeroLearner:
 
         # select greedy action
         action = self.select_action(root, t_env=t_env, greedy=False)
-        # root.summary()
-        # print("aa=", root.state.avail_actions)
-        # print("visits=", root.child_visits)
-        # print("rewards=", root.child_rewards)
-        # print("values=", root.action_values)
-        # print("selected=", action.flatten().tolist())
-        return action, root.child_visits
+        values = root.child_rewards + self.args.gamma * root.action_values
+
+        if t_start == 0:
+
+            # root.summary()
+            # print("aa=", root.state.avail_actions)
+            # print("visits=", root.child_visits)
+            # print("rewards=", root.child_rewards)
+            # print("values=", root.action_values)
+            # print("priors=", initial_priors)
+            print("values=", values)
+            print("selected=", action.flatten().tolist())
+
+        return action, values
 
     def rollout(self, node, actions):
 

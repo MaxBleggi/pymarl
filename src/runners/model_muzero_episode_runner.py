@@ -66,12 +66,12 @@ class ModelMuZeroEpisodeRunner:
             self.batch.update(pre_transition_data, ts=self.t)
 
             if use_search:
-                actions, counts = self.model.mcts(self.batch, self.t_env, self.t)
+                actions, policy = self.model.mcts(self.batch, self.t_env, self.t)
                 # actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
                 reward, terminated, env_info = self.env.step(actions[0])
                 # print(
                 #     f"t={self.t}: actions: {actions[0]} reward={reward:.2f}")
-                self.batch.update({"visit_counts": counts}, ts=self.t)
+                self.batch.update({"mcts_policy": policy}, ts=self.t)
 
             else:
                 # Pass the entire batch of experiences up till now to the agents

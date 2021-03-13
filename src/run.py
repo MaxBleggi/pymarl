@@ -94,7 +94,7 @@ def run_sequential(args, logger):
         "obs": {"vshape": env_info["obs_shape"], "group": "agents"},
         "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
         "avail_actions": {"vshape": (env_info["n_actions"],), "group": "agents", "dtype": th.int},
-        "visit_counts": {"vshape": (env_info["n_actions"],), "group": "agents"},
+        "mcts_policy": {"vshape": (env_info["n_actions"],), "group": "agents"},
         "reward": {"vshape": (1,)},
         "terminated": {"vshape": (1,), "dtype": th.uint8},
         "battle_won": {"vshape": (1,), "dtype": th.uint8},
