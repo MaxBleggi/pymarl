@@ -46,7 +46,7 @@ model_log_epochs: 10
 model_bootstrap_timesteps: 10 # n in the n-step return estimate
 model_rollout_timesteps: 5 # number of timesteps to simulate during model training
 model_rollout_timestep_samples: 10
-model_mcts_simulations: 10
+model_mcts_simulations: 50
 model_state_prior_steps: 10 # number of prior timesteps to use for encoding state
 model_dirichlet_alpha: 0.25
 
@@ -59,7 +59,7 @@ model_use_search: True
 
 # action selection
 model_mac: "muzero_mac"
-model_action_selector: "muzero"
+model_action_selector: "muzero_epsilon_greedy"
 ucb_temperature_start: 1
 ucb_temperature_finish: 0.25
 ucb_temperature_anneal_time: 50000

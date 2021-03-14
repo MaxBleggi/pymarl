@@ -119,3 +119,31 @@ class MuZeroActionSelector():
         return picked_actions
 
 REGISTRY["muzero"] = MuZeroActionSelector
+
+class MuZeroEpsilonGreedyActionSelector():
+
+    def __init__(self, args):
+        self.args = args
+        self.schedule = DecayThenFlatSchedule(args.ucb_temperature_start, args.ucb_temperature_finish, args.ucb_temperature_anneal_time,
+                                              args.ucb_temperature_delay, decay="linear")
+        self.epsilon = self.schedule.eval(0)
+        self.greedy_epsilon = 0
+
+    def select_action(self, agent_inputs, avail_actions, t_env, greedy=False):
+
+        masked_policies = agent_inputs.clone()
+        masked_policies[avail_actions == 0.0] = -float("inf")
+
+        if greedy:
+            self.epsilon = self.greedy_epsilon
+        else:
+            self.epsilon = self.schedule.eval(t_env)
+
+        random_numbers = th.rand_like(agent_inputs[:, :, 0])
+        pick_random = (random_numbers < self.epsilon).long()
+        random_actions = Categorical(avail_actions.float()).sample().long()
+
+        picked_actions = pick_random * random_actions + (1 - pick_random) * masked_policies.max(dim=2)[1]
+        return picked_actions
+
+REGISTRY["muzero_epsilon_greedy"] = MuZeroActionSelector
