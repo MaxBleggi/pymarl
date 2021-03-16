@@ -146,4 +146,4 @@ class MuZeroEpsilonGreedyActionSelector():
         picked_actions = pick_random * random_actions + (1 - pick_random) * masked_policies.max(dim=2)[1]
         return picked_actions
 
-REGISTRY["muzero_epsilon_greedy"] = MuZeroActionSelector
+REGISTRY["muzero_epsilon_greedy"] = MuZeroEpsilonGreedyActionSelector

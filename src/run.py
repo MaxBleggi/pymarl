@@ -207,11 +207,11 @@ def run_sequential(args, logger):
         if args.model_learner:
             episode_batch, episode_return = runner.run(use_search=args.model_use_search, test_mode=False)
             print(
-                f"SEARCH: return {episode_return:.3f} epsilon: {model.model_mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"[{episode}] SEARCH: return {episode_return:.3f} epsilon: {model.model_mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
         else:
             episode_batch, episode_return = runner.run(use_search=False, test_mode=False)
             print(
-                f"STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
+                f"[{episode}] STANDARD: return {episode_return:.3f} epsilon: {mac.action_selector.epsilon:.3f} T_env: {runner.t_env}, {time.time() - t_op_start:.2f} s")
 
         buffer.insert_episode_batch(episode_batch)
 

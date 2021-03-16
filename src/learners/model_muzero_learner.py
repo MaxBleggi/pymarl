@@ -475,13 +475,14 @@ class ModelMuZeroLearner:
         """
         device = self.device
         batch_size = self.args.model_rollout_batch_size
-
         counts = parent.child_visits.repeat(batch_size, 1, 1)
-
         avail_actions = parent.state.avail_actions
-        #selected_actions = self.model_mac.select_actions(counts, avail_actions, t_env=t_env, greedy=greedy)
 
-        selected_actions = self.model_mac.select_actions(parent.priors, avail_actions, t_env=t_env, greedy=greedy)
+        selected_actions = None
+        if self.args.model_predict_target_policy:
+            selected_actions = self.model_mac.select_actions(parent.priors, avail_actions, t_env=t_env, greedy=greedy)
+        else:
+            selected_actions = self.model_mac.select_actions(counts, avail_actions, t_env=t_env, greedy=greedy)
 
         # print(f"name={parent.name}, counts={counts.view(self.action_space)}")
         # print(f"avail_actions={parent.state.avail_actions.view(self.action_space)}")
@@ -535,7 +536,7 @@ class ModelMuZeroLearner:
 
             if self.args.model_add_exploration_noise:
                 initial_priors = self.add_exploration_noise(initial_priors, avail_actions)
-            initial_priors = initial_priors * avail_actions
+            #initial_priors = initial_priors * avail_actions
 
         root.priors = initial_priors
         root.state = TreeState(ht, ct, avail_actions)
@@ -601,6 +602,7 @@ class ModelMuZeroLearner:
         # select greedy action
         action = self.select_action(root, t_env=t_env, greedy=False)
         values = root.child_rewards + self.args.gamma * root.action_values
+        #values = torch.softmax(parent.child_visits, dim=-1)
 
         if t_start == 0:
 
