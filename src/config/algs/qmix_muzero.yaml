@@ -24,7 +24,7 @@ hypernet_embed: 64
 
 # models
 runner: "model_muzero_episode"
-model_learner: "model_muzero"
+model_learner: #"model_muzero"
 dynamics_model_hidden_dim: 64
 representation_model_hidden_dim: 64
 actions_model_hidden_dim: 64
@@ -46,9 +46,12 @@ model_log_epochs: 10
 model_bootstrap_timesteps: 10 # n in the n-step return estimate
 model_rollout_timesteps: 5 # number of timesteps to simulate during model training
 model_rollout_timestep_samples: 10
-model_mcts_simulations: 50
+model_mcts_simulations: 0
 model_state_prior_steps: 10 # number of prior timesteps to use for encoding state
 model_dirichlet_alpha: 0.25
+model_add_exploration_noise: False
+model_select_action_from_target_policy: True # use qmix etc for action selection - used for debugging
+model_predict_target_policy: False # muzero estimates the qmix etc policy instead of the the mcts visit count distribution
 
 # rollouts
 model_rollout_timesteps: # default to max scenario timesteps
@@ -61,7 +64,7 @@ model_use_search: True
 model_mac: "muzero_mac"
 model_action_selector: "muzero_epsilon_greedy"
 ucb_temperature_start: 1
-ucb_temperature_finish: 0.25
+ucb_temperature_finish: 0.05
 ucb_temperature_anneal_time: 50000
 ucb_temperature_delay: 0
 ucb_c1: 1.25

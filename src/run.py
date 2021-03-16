@@ -233,7 +233,7 @@ def run_sequential(args, logger):
                 learner.train(episode_sample, runner.t_env, episode)
                 print(f"Training target policy: {time.time() - t_op_start: .2f} s")
 
-        if args.model_learner:
+        if args.model_learner and not args.model_select_action_from_target_policy:
             if buffer.can_sample(args.model_min_samples): # and buffer.can_sample(args.model_batch_size):
                 # train environment model
                 t_op_start = time.time()

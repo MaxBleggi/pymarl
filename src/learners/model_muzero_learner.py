@@ -113,6 +113,7 @@ class ModelMuZeroLearner:
         self.training_steps = 0
 
         self.tree_stats = TreeStats()
+        self.hidden_state = None # recurrent hidden state used throughout an episode
         self.trained = False
 
         # debugging
@@ -183,15 +184,16 @@ class ModelMuZeroLearner:
             mask[i, :term_idx[i] + 1] = 1
 
         # generate target policy outputs
-        # use this to approximate target policy
-        # with torch.no_grad():
-        #     self.target_mac.init_hidden(nbatch)
-        #     for t in range(terminated.size()[1]): # max timesteps
-        #         policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
+        policy = torch.zeros_like(action)
 
-        # otherwise approximate behaviour policy
-        policy = torch.softmax(mcts_policy, dim=-1).view((nbatch, ntimesteps, -1))
-        # policy = mcts_policy.view((nbatch, ntimesteps, -1))
+        if self.args.model_predict_target_policy:
+            with torch.no_grad():
+                self.target_mac.init_hidden(nbatch)
+                for t in range(terminated.size()[1]): # max timesteps
+                    policy[:, t, :] = self.target_mac.forward(batch, t=t).view(nbatch, -1)
+        else:
+            # otherwise approximate behaviour policy
+            policy = torch.softmax(mcts_policy, dim=-1).view((nbatch, ntimesteps, -1))
 
         obs *= mask
         aa *= mask
@@ -445,7 +447,7 @@ class ModelMuZeroLearner:
         visit_ratio = torch.sqrt(parent_count) / (1 + parent.child_visits)
         c2_ratio = (parent_count + c2 + 1) / c2
         exploration_bonus = visit_ratio * (c1 + torch.log(c2_ratio)) if parent.count > 0 else 1.0
-        prior_scores = parent.priors * exploration_bonus
+        prior_scores = torch.softmax(parent.priors, dim=-1) * exploration_bonus
 
         value_scores = parent.child_rewards + self.args.gamma * self.tree_stats.normalize(parent.action_values)
         scores = prior_scores + value_scores
@@ -477,7 +479,9 @@ class ModelMuZeroLearner:
         counts = parent.child_visits.repeat(batch_size, 1, 1)
 
         avail_actions = parent.state.avail_actions
-        selected_actions = self.model_mac.select_actions(counts, avail_actions, t_env=t_env, greedy=greedy)
+        #selected_actions = self.model_mac.select_actions(counts, avail_actions, t_env=t_env, greedy=greedy)
+
+        selected_actions = self.model_mac.select_actions(parent.priors, avail_actions, t_env=t_env, greedy=greedy)
 
         # print(f"name={parent.name}, counts={counts.view(self.action_space)}")
         # print(f"avail_actions={parent.state.avail_actions.view(self.action_space)}")
@@ -485,7 +489,15 @@ class ModelMuZeroLearner:
 
         return selected_actions
 
-    def initialise(self, batch, t_start):
+    # def initialise_episode(self):
+    #     batch_size = self.args.model_rollout_batch_size
+    #     if self.args.model_select_action_from_target_policy:
+    #         self.target_mac.init_hidden(batch_size)
+    #     else:
+    #         pass
+    #         # self.hidden_state = self.target_dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
+
+    def initialise_mcts(self, root, batch, t_start):
         # encode the real state
         if batch.device != self.device:
             batch.to(self.device)
@@ -509,20 +521,25 @@ class ModelMuZeroLearner:
             avail_actions = avail_actions.repeat(batch_size, 1, 1)
 
             # generate implicit state
+            _, ct = self.target_dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
             ht = self.target_representation_model(state)
 
-            # initialise dynamics model hidden state
-            _, ct = self.target_dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
-
             # initialise root node policy
-            initial_priors = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
+            if self.args.model_select_action_from_target_policy:
+                initial_priors = self.target_mac.forward(batch, t=t_start).view(batch_size, n_agents, n_actions)
+            else:
+                initial_priors = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
+
             if t_start == 0:
                 print("priors=", initial_priors)
 
-            initial_priors = self.add_exploration_noise(initial_priors, avail_actions)
+            if self.args.model_add_exploration_noise:
+                initial_priors = self.add_exploration_noise(initial_priors, avail_actions)
             initial_priors = initial_priors * avail_actions
 
-        return initial_priors, TreeState(ht, ct, avail_actions)
+        root.priors = initial_priors
+        root.state = TreeState(ht, ct, avail_actions)
+        root.expanded = True
 
     def expand_node(self, node):
         action = node.action.repeat(self.args.model_rollout_batch_size, 1)
@@ -552,10 +569,7 @@ class ModelMuZeroLearner:
 
         # initialise root node
         root = Node('root', self.action_space, t=t_start, device=self.device)
-        initial_priors, root.state = self.initialise(batch, t_start)
-        # print(f"initial_priors={initial_priors}")
-        root.priors = initial_priors
-        root.expanded = True
+        self.initialise_mcts(root, batch, t_start)
 
         # run mcts
         debug = False
@@ -595,7 +609,7 @@ class ModelMuZeroLearner:
             # print("visits=", root.child_visits)
             # print("rewards=", root.child_rewards)
             # print("values=", root.action_values)
-            # print("priors=", initial_priors)
+            # print("priors=", root.priors)
             print("values=", values)
             print("selected=", action.flatten().tolist())
 

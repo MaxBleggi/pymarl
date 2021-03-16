@@ -53,6 +53,7 @@ class ModelMuZeroEpisodeRunner:
         terminated = False
         episode_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
+        #self.model.initialise_episode()
 
         while not terminated:
 
