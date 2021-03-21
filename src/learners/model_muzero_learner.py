@@ -418,11 +418,16 @@ class ModelMuZeroLearner:
             self._update_target_models()
             self.training_steps = 0
 
-    def select_child(self, parent):
+    def select_child(self, parent, t_env):
         """
-        use tree policy to select a child via max ucb
+        use tree policy to select a child
         """
-        action = self.select_ucb_action(parent)
+        action = None
+        if self.args.model_mcts_tree_policy == "epsilon_greedy":
+            action = self.select_epsilon_greedy_action(parent, t_env)
+        elif self.args.model_mcts_tree_policy == "ucb":
+            action = self.select_ucb_action(parent)
+
         key = tuple(action.flatten().cpu().tolist())
         #print('selecting greedy action', key)
         if key in parent.children:
@@ -469,26 +474,43 @@ class ModelMuZeroLearner:
 
         return selected_actions
 
-    def select_action(self, parent, t_env=0, greedy=False):
-        """
-        Temperature based action selection based on visit count
-        """
-        device = self.device
+    def select_epsilon_greedy_action(self, parent, t_env):
+
+        "epsilion greed with respect to parent priors"
+
         batch_size = self.args.model_rollout_batch_size
-        counts = parent.child_visits.repeat(batch_size, 1, 1)
         avail_actions = parent.state.avail_actions
 
-        selected_actions = None
-        if self.args.model_predict_target_policy:
-            selected_actions = self.model_mac.select_actions(parent.priors, avail_actions, t_env=t_env, greedy=greedy)
-        else:
-            selected_actions = self.model_mac.select_actions(counts, avail_actions, t_env=t_env, greedy=greedy)
+        if self.args.model_mcts_tree_policy_metric == "priors":
+            return self.model_mac.select_actions(parent.priors.repeat(batch_size, 1, 1), avail_actions, t_env=t_env)
+        elif self.args.model_mcts_tree_policy_metric == "counts":
+            return self.model_mac.select_actions(parent.child_visits.repeat(batch_size, 1, 1), avail_actions, t_env=t_env)
+        elif self.args.model_mcts_tree_policy_metric == "values":
+            values = parent.child_rewards + self.args.gamma * self.tree_stats.normalize(parent.action_values)
+            return self.model_mac.select_actions(values.repeat(batch_size, 1, 1), avail_actions, t_env=t_env)
 
-        # print(f"name={parent.name}, counts={counts.view(self.action_space)}")
-        # print(f"avail_actions={parent.state.avail_actions.view(self.action_space)}")
-        # print(f"selected_action={selected_actions}")
+    def select_action(self, parent, t_env=0, greedy=False):
 
-        return selected_actions
+        "root node action selection"
+
+        device = self.device
+        batch_size = self.args.model_rollout_batch_size
+        avail_actions = parent.state.avail_actions
+        actions, policy = None, None
+
+        if self.args.model_mcts_root_policy_metric == "priors": # this only works with model_predict_target_policy=True
+            actions = self.model_mac.select_actions(parent.priors.repeat(batch_size, 1, 1), avail_actions, t_env=t_env, greedy=greedy)
+            policy = torch.zeros_like(parent.priors)
+            if not self.args.model_predict_target_policy:
+                print("Warning, model_mcts_root_policy_metric=priors should only be used with model_predict_target_policy=True")
+        elif self.args.model_mcts_root_policy_metric == "counts":
+            policy = torch.softmax(parent.child_visits, dim=-1)
+            actions = self.model_mac.select_actions(policy.repeat(batch_size, 1, 1), avail_actions, t_env=t_env, greedy=greedy)
+        elif self.args.model_mcts_root_policy_metric == "values":
+            policy = parent.child_rewards + self.args.gamma * self.tree_stats.normalize(parent.action_values)
+            actions = self.model_mac.select_actions(policy.repeat(batch_size, 1, 1), avail_actions, t_env=t_env, greedy=greedy)
+
+        return actions, policy
 
     # def initialise_episode(self):
     #     batch_size = self.args.model_rollout_batch_size
@@ -531,8 +553,8 @@ class ModelMuZeroLearner:
             else:
                 initial_priors = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
 
-            if t_start == 0:
-                print("priors=", initial_priors)
+            # if t_start == 0:
+            #     print("priors=", initial_priors)
 
             if self.args.model_add_exploration_noise:
                 initial_priors = self.add_exploration_noise(initial_priors, avail_actions)
@@ -574,6 +596,7 @@ class ModelMuZeroLearner:
 
         # run mcts
         debug = False
+
         for i in range(n_sim):
             #print(f"Simulation {i + 1}")
             child = parent = root
@@ -582,7 +605,7 @@ class ModelMuZeroLearner:
 
             while parent.expanded:
                 # execute tree policy
-                child = self.select_child(parent)
+                child = self.select_child(parent, t_env)
                 if debug:
                     print(f"depth={depth}, parent={parent.name}, action={child.action.flatten().tolist()}, term={parent.terminated}")
                 history.append((parent, child))
@@ -600,22 +623,19 @@ class ModelMuZeroLearner:
                 print("----------------------------------------------")
 
         # select greedy action
-        action = self.select_action(root, t_env=t_env, greedy=False)
-        values = root.child_rewards + self.args.gamma * root.action_values
-        #values = torch.softmax(parent.child_visits, dim=-1)
-
+        actions, policy = self.select_action(root, t_env=t_env, greedy=False)
         if t_start == 0:
-
             # root.summary()
             # print("aa=", root.state.avail_actions)
-            # print("visits=", root.child_visits)
+            print("priors=", root.priors)
+            print("visits=", root.child_visits)
             # print("rewards=", root.child_rewards)
-            # print("values=", root.action_values)
-            # print("priors=", root.priors)
-            print("values=", values)
-            print("selected=", action.flatten().tolist())
+            print("values=", root.action_values)
+            policy = root.child_rewards + self.args.gamma * self.tree_stats.normalize(root.action_values)
+            print("policy=", policy)
+            print("selected=", actions.flatten().tolist())
 
-        return action, values
+        return actions, policy
 
     def rollout(self, node, actions):
 

@@ -31,7 +31,6 @@ actions_model_hidden_dim: 64
 policy_model_hidden_dim: 64
 reward_model_hidden_dim: 64
 term_model_hidden_dim: 64
-reward_model_hidden_dim: 64
 value_model_hidden_dim: 64
 
 # model learning params
@@ -43,18 +42,20 @@ model_batch_size: 32
 model_intitial_epochs: 1
 model_epochs: 1 # per RL step (this is the number of times the replay buffer is sampled between real env execution)
 model_log_epochs: 10
-model_bootstrap_timesteps: 10 # n in the n-step return estimate
+model_bootstrap_timesteps: 50 # n in the n-step return estimate
 model_rollout_timesteps: 5 # number of timesteps to simulate during model training
 model_rollout_timestep_samples: 10
-model_mcts_simulations: 50
+model_mcts_simulations: 0
 model_state_prior_steps: 10 # number of prior timesteps to use for encoding state
 model_dirichlet_alpha: 0.25
-model_add_exploration_noise: True
+model_add_exploration_noise: False
 model_select_action_from_target_policy: False # use qmix etc for action selection - used for debugging
-model_predict_target_policy: False # muzero estimates the qmix etc policy otherwise use the mcts visit count distribution
+model_predict_target_policy: True # muzero estimates the qmix etc policy otherwise use the mcts visit count etc distribution
+model_mcts_tree_policy: "epsilon_greedy" # 'epsilon_greedy' or 'ucb'
+model_mcts_tree_policy_metric: "priors" # priors, counts, values # only applies to model_mcts_tree_policy=epsilon_greedy
+model_mcts_root_policy_metric: "priors" # priors=target policy, counts=visit count distribution, values=mcts action values
 
 # rollouts
-model_rollout_timesteps: # default to max scenario timesteps
 model_rollout_batch_size: 1 # for this to be bigger we would need to generate more candidate actions (ie expand multiple child nodes)
 model_term_threshold: 0.5 # masks termination signal outputs at this threshold
 model_action_threshold: 0.5 # # masks available action outputs at this threshold
