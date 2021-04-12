@@ -73,7 +73,7 @@ ucb_c2: 19652
 mcts_update_interval: 1
 
 # debug
-model_save_val_data: False
+model_save_val_data: True
 #episode_dir: "/home/ubuntu/masters/experiments/model-learning/1/val_data"
 
 name: "qmix-muzero"

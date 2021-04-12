@@ -172,7 +172,6 @@ class ModelMuZeroLearner:
             r = reward[:, i : i + n]
             c = coeff[:, :r.size()[1]]        
             value[:, i] = torch.mul(r, c).sum(dim=1)
-            value[:, i] = r.sum(dim=1)
 
         # termination signal
         terminated = batch["terminated"][:, :-1].float()
@@ -300,7 +299,7 @@ class ModelMuZeroLearner:
                             "n_actions": self.args.n_actions,
                             "y": y.cpu(),
                             "yp": yp.cpu(),
-                            "val_loss": self.val_loss.item()
+                            "val_loss": self.val_loss
                         }
                         pickle.dump(save_data, f)
                     self.save_index += 1
@@ -329,7 +328,6 @@ class ModelMuZeroLearner:
         rollout_timesteps = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else 0
 
         timesteps = list(range(max_t.item() - rollout_timesteps - 2))
-        random.shuffle(timesteps)
 
         n = self.args.model_rollout_timestep_samples
         nt = max_t.item() - rollout_timesteps - 2

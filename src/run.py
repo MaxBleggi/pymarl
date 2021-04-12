@@ -155,7 +155,7 @@ def run_sequential(args, logger):
             else:
                 # choose the timestep closest to load_step
                 timestep_to_load = min(rl_timesteps, key=lambda x: abs(x - load_step))
-                model_path = os.path.join(args.checkpoint_path, f"rl_{timestep_to_load}")
+            model_path = os.path.join(args.checkpoint_path, f"rl_{timestep_to_load}")
 
         else:
             timesteps = []
@@ -174,7 +174,7 @@ def run_sequential(args, logger):
                 # choose the timestep closest to load_step
                 timestep_to_load = min(timesteps, key=lambda x: abs(x - args.load_step))
 
-                model_path = os.path.join(args.checkpoint_path, str(timestep_to_load))
+            model_path = os.path.join(args.checkpoint_path, str(timestep_to_load))
 
         logger.console_logger.info("Loading model from {}".format(model_path))
         learner.load_models(model_path)
