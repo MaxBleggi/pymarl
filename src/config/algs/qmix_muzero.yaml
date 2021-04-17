@@ -48,7 +48,7 @@ model_select_action_from_target_policy: False # use qmix etc for action selectio
 model_predict_target_policy: True # muzero estimates the qmix etc policy otherwise use the mcts visit count etc distribution
 model_mcts_tree_policy: "epsilon_greedy" # 'epsilon_greedy' or 'ucb'
 model_mcts_tree_policy_metric: "priors" # priors, counts, values # only applies to model_mcts_tree_policy=epsilon_greedy
-model_mcts_root_policy_metric: "counts" # priors=target policy, counts=visit count distribution, values=mcts action values
+model_mcts_root_policy_metric: "values" # priors=target policy, counts=visit count distribution, values=mcts action values
 
 # rollouts
 model_rollout_batch_size: 1 # for this to be bigger we would need to generate more candidate actions (ie expand multiple child nodes)
