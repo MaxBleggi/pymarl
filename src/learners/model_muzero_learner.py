@@ -10,13 +10,9 @@ import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical, Dirichlet
 
-from modules.models.representation import RepresentationModel
 from modules.models.dynamics import DynamicsModel
-from modules.models.actions import ActionsModel
-from modules.models.policy import PolicyModel
-from modules.models.reward import RewardModel
-from modules.models.term import TermModel
-from modules.models.value import ValueModel
+from modules.models.policy_actions import PolicyActionsModel
+from modules.models.policy_actions import PADynamicsModel
 
 import copy
 import numpy as np
@@ -25,7 +21,6 @@ from envs import REGISTRY as env_REGISTRY
 import os
 import pickle
 from glob import glob
-import queue
 from controllers import REGISTRY as mac_REGISTRY
 from .muzero_tree import *
 
@@ -51,48 +46,18 @@ class ModelMuZeroLearner:
         self.value_size = 1
 
         # dynamics model
-        dynamics_model_input_size = self.actions_size
-        #self.dynamics_model_output_size = self.reward_size + self.term_size
-        self.dynamics_model = DynamicsModel(dynamics_model_input_size, args.dynamics_model_hidden_dim)
+        self.dynamics_model = DynamicsModel(self.state_size, self.actions_size, args.dynamics_model_hidden_dim)
 
-        # representation model
-        representation_model_input_size = self.state_size
-        representation_model_output_size = args.dynamics_model_hidden_dim
-        self.representation_model = RepresentationModel(representation_model_input_size, representation_model_output_size,
-                                                   args.representation_model_hidden_dim)
-
-        # actions model
-        actions_model_input_size = args.dynamics_model_hidden_dim
-        actions_model_output_size = self.actions_size
-        self.actions_model = ActionsModel(actions_model_input_size, actions_model_output_size, args.actions_model_hidden_dim)
-
-        # policy model
-        policy_model_input_size = args.dynamics_model_hidden_dim
-        policy_model_output_size = self.actions_size
-        self.policy_model = PolicyModel(policy_model_input_size, policy_model_output_size, args.policy_model_hidden_dim)
-
-        # reward model
-        reward_model_input_size = args.dynamics_model_hidden_dim
-        reward_model_output_size = self.reward_size
-        self.reward_model = RewardModel(reward_model_input_size, reward_model_output_size, args.reward_model_hidden_dim)
-
-        # term model
-        term_model_input_size = args.dynamics_model_hidden_dim
-        term_model_output_size = self.term_size
-        self.term_model = TermModel(term_model_input_size, term_model_output_size, args.term_model_hidden_dim)
-
-        # value model
-        value_model_input_size = args.value_model_hidden_dim
-        value_model_output_size = self.value_size
-        self.value_model = ValueModel(value_model_input_size, value_model_output_size, args.value_model_hidden_dim)
+        # policy / actions model
+        self.policy_actions_model = PolicyActionsModel(self.state_size, self.actions_size)
+        self.pa_dynamics_model = PADynamicsModel(self.state_size, self.actions_size, args.policy_actions_model_hidden_dim)
 
         # optimizer
-        self.params = list(self.dynamics_model.parameters()) + list(self.representation_model.parameters()) \
-                    + list(self.actions_model.parameters()) + list(self.policy_model.parameters()) \
-                    + list(self.reward_model.parameters()) + list(self.term_model.parameters()) \
-                    + list(self.value_model.parameters())
+        self.dynamics_model_params = self.dynamics_model.parameters()
+        self.policy_actions_model_params = list(self.policy_actions_model.parameters()) + list(self.pa_dynamics_model.parameters())
         
-        self.optimizer = torch.optim.Adam(self.params, lr=self.args.model_learning_rate)
+        self.dynamics_model_optimizer = torch.optim.Adam(self.dynamics_model_params, lr=self.args.model_learning_rate)
+        self.policy_actions_model_optimizer = torch.optim.Adam(self.policy_actions_model_params, lr=self.args.model_learning_rate)
 
         # create copies fo the models to use for generating training data
         self._update_target_models()
@@ -101,8 +66,8 @@ class ModelMuZeroLearner:
         self.train_loss, self.val_loss = 0, 0
         self.train_r_loss, self.val_r_loss = 0, 0
         self.train_T_loss, self.val_T_loss = 0, 0
-        self.train_aa_loss, self.val_aa_loss = 0, 0
         self.train_p_loss, self.val_p_loss = 0, 0
+        self.train_aa_loss, self.val_aa_loss = 0, 0
         self.train_v_loss, self.val_v_loss = 0, 0
         self.model_grad_norm = 0
 
@@ -131,12 +96,8 @@ class ModelMuZeroLearner:
 
     def _update_target_models(self):
         self.target_dynamics_model = copy.deepcopy(self.dynamics_model)
-        self.target_representation_model = copy.deepcopy(self.representation_model)
-        self.target_policy_model = copy.deepcopy(self.policy_model)
-        self.target_reward_model = copy.deepcopy(self.reward_model)
-        self.target_value_model = copy.deepcopy(self.value_model)
-        self.target_actions_model = copy.deepcopy(self.actions_model)
-        self.target_term_model = copy.deepcopy(self.term_model)
+        self.target_policy_actions_model = copy.deepcopy(self.policy_actions_model)
+        self.target_pa_dynamics_model = copy.deepcopy(self.pa_dynamics_model)
         print("Update mcts target models")
 
     def get_episode_vars(self, batch):
@@ -204,106 +165,175 @@ class ModelMuZeroLearner:
 
         return state, action, reward, term_signal, obs, aa, policy, value, mask
 
-    def get_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, value, mask, start_t=0, max_t=None):
+    def get_dynamics_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, value, mask,
+                               state_prior_steps, start_t=0, predict=1, debug=False):
 
         # inputs
         s = state[:, :-1, :]  # state at time t
         a = actions[:, :-1, :]  # joint action at time t
 
         # outputs
-        r = reward[:, :-1, :]  # reward at time t+1        
+        r = reward[:, :-1, :]  # reward at time t+1
         T = term_signal[:, :-1, :]  # terminated at t+1
+        v = value[:, 1:, :]  # discounted k-step return at t+1
 
-        vt = value[:, 1:, :]  # discounted k-step return at t+1
-        av = aa[:, 1:, :]  # available actions at t+1
-        pt = policy[:, 1:, :] # raw policy outputs at t+1
+        y = torch.cat((r, v, T), dim=-1)
 
-        y = torch.cat((r, T, av, pt, vt), dim=-1)
-
-        if start_t == "random":
-            start = int(random.random() * (s.size()[1] - 1))
-        else:
-            start = start_t
-
-        start_s = max(0, start - self.args.model_state_prior_steps)
-        end_s = start_s + self.args.model_state_prior_steps
+        start_s = max(0, start_t - state_prior_steps)
+        end_s = start_t + predict
         s = s[:, start_s:end_s]
 
-        a = a[:, start:]
-        y = y[:, start:]
+        a = a[:, start_s:end_s]
+        y = y[:, start_t:start_t + predict]
 
-        if max_t:
-            a = a[:, :max_t]
-            y = y[:, :max_t]
+        if debug:
+            print(
+                f"start_t={start_t}, prior_steps={state_prior_steps}, predict={predict}, s_slice={start_s}-{end_s}, s_size={s.size()}, a_slice={start_s}-{end_s}, a_size={a.size()}")
 
         return s, a, y
 
-    def run_model(self, state, actions, ht_ct=None):
+    def get_policy_actions_model_input_output(self, state, actions, reward, term_signal, obs, aa, policy, value, mask,
+                                        state_prior_steps, start_t=0, predict=1, debug=False):
 
-        bs, steps, n_actions = actions.size()
-        ht, ct = ht_ct if ht_ct else self.dynamics_model.init_hidden(bs, self.device)
-        output_size = self.reward_size + self.term_size + 2 * self.actions_size + self.value_size
-        yp = torch.zeros(bs, steps, output_size).to(self.device)
+        # inputs
+        s = state[:, :-1, :]  # state at time t
+        a = actions[:, :-1, :]  # joint action at time t
 
-        for t in range(0, steps):
+        av = aa[:, :-1, :]  # available actions at t
+        pt = policy[:, :-1, :]  # raw policy outputs at t
 
-            if t == 0:
-                ht = self.representation_model(state)
+        y = torch.cat((pt, av), dim=-1)
 
+        start_s = max(0, start_t - state_prior_steps)
+        end_s = start_t + predict
+        s = s[:, start_s:end_s]
+
+        a = a[:, start_s:end_s]
+        y = y[:, start_t:start_t + predict]
+
+        if debug:
+            print(
+                f"start_t={start_t}, prior_steps={state_prior_steps}, predict={predict}, s_slice={start_s}-{end_s}, s_size={s.size()}, a_slice={start_s}-{end_s}, a_size={a.size()}")
+
+        return s, a, y
+
+    def run_dynamics_model(self, state, actions, ht_ct=None, predict=1):
+
+        bs, steps, _ = actions.size()
+        warmup = max(0, steps - predict)
+        yp = torch.zeros(bs, predict, 3).to(self.device)
+
+        # init and warmup
+        if not ht_ct:
+            ht_ct = self.dynamics_model.init_hidden(bs, self.device)
+
+        for t in range(0, warmup):
             at = actions[:, t, :]
+            st = state[:, t, :]
+            st, _, _, _, ht_ct = self.dynamics_model(st, at, ht_ct)
 
-            # step
-            ht, ct = self.dynamics_model(at, (ht, ct))
+        # predict
+        for t in range(warmup, steps):
+            at = actions[:, t, :]
+            st = state[:, t, :] if warmup == 0 else st
+            st, rt, vt, tt, ht_ct = self.dynamics_model(st, at, ht_ct)
 
-            rt = self.reward_model(ht)            
-            Tt = self.term_model(ht)
-            avt = self.actions_model(ht)
-            pt = self.policy_model(ht)
-            vt = self.value_model(ht)
+            yp[:, t - warmup, :] = torch.cat((rt, vt, tt), dim=-1)
 
-            yp[:, t, :] = torch.cat((rt, Tt, avt, pt, vt), dim=-1)
+        return yp, ht_ct
 
-        return yp, (ht, ct)
+    def run_policy_actions_model(self, state, actions, ht_ct=None, predict=1):
 
-    def _validate(self, vars):
+        bs, steps, _ = actions.size()
+        warmup = max(0, steps - predict)
+        # print(actions.size(), warmup, predict)
+        yp = torch.zeros(bs, predict, 2 * self.actions_size).to(self.device)
+
+        # init and warmup
+        ht_ct = self.pa_dynamics_model.init_hidden(bs, self.device)
+        for t in range(0, warmup):
+            at = actions[:, t, :]
+            st = state[:, t, :]
+            st, ht_ct = self.pa_dynamics_model(st, at, ht_ct)
+
+        # predict
+        for t in range(warmup, steps):
+            at = actions[:, t, :]
+            st = state[:, t, :] if warmup == 0 else st
+
+            pt, aa = self.policy_actions_model(st)
+            yp[:, t - warmup, :] = torch.cat((pt, aa), dim=-1)
+
+            st, ht_ct = self.pa_dynamics_model(st, at, ht_ct)
+
+        return yp, ht_ct
+
+    def _validate(self, vars, max_t):
         t_start = time.time()
 
-        self.representation_model.eval()
         self.dynamics_model.eval()
-        self.actions_model.eval()
-        self.policy_model.eval()
-        self.reward_model.eval()
-        self.term_model.eval()
-        self.value_model.eval()
+        self.policy_actions_model.eval()
+        self.pa_dynamics_model.eval()
+
+        predict = self.args.model_rollout_timesteps
+
+        nt = max_t.item() - predict - 2
+        timesteps = np.arange(nt)
+
+        total_val_loss = np.zeros(nt)
+        total_r_val_loss = np.zeros(nt)
+        total_term_val_loss = np.zeros(nt)
+        total_aa_val_loss = np.zeros(nt)
+        total_policy_val_loss = np.zeros(nt)
+        total_value_val_loss = np.zeros(nt)
 
         with torch.no_grad():
-            state, actions, y = self.get_model_input_output(*vars, start_t="random", max_t=self.args.model_rollout_timesteps)
-            yp, _ = self.run_model(state, actions)
-            loss_vector = F.mse_loss(yp, y, reduction='none')
 
-            idx = 0
-            self.val_loss = loss_vector.mean().cpu().numpy().item()
-            self.val_r_loss = loss_vector[:, :, idx:idx + self.reward_size].mean().cpu().numpy().item(); idx += self.reward_size
-            self.val_T_loss = loss_vector[:, :, idx:idx + self.term_size].mean().cpu().numpy().item(); idx += self.term_size
-            self.val_aa_loss = loss_vector[:, :, idx:idx + self.actions_size].mean().cpu().numpy().item(); idx += self.actions_size
-            self.val_p_loss = loss_vector[:, :, idx:idx + self.actions_size].mean().cpu().numpy().item(); idx += self.actions_size
-            self.val_v_loss = loss_vector[:, :, idx:idx + self.value_size].mean().cpu().numpy().item(); idx += self.value_size
+            for i in timesteps:
 
-            if self.args.model_save_val_data:
-                # save input_outputs
-                if os.path.exists(self.args.episode_dir):
-                    fname = os.path.join(self.args.episode_dir, f"input_output_{self.save_index + 1:06}.pkl")
-                    with open(fname, 'wb') as f:
-                        save_data = {
-                            "n_agents": self.args.n_agents,
-                            "n_actions": self.args.n_actions,
-                            "y": y.cpu(),
-                            "yp": yp.cpu(),
-                            "val_loss": self.val_loss
-                        }
-                        pickle.dump(save_data, f)
-                    self.save_index += 1
+                # dynamics
+                state, actions, y = self.get_dynamics_model_input_output(*vars, self.args.model_state_prior_steps, start_t=i, predict=predict)
+                yp, _ = self.run_dynamics_model(state, actions, predict=predict)
+                loss_vector = F.mse_loss(yp, y, reduction='none')
 
+                idx = 0
+                total_val_loss[i] = loss_vector.mean().cpu().numpy().item()
+                total_r_val_loss[i] = loss_vector[:, :, idx:idx + self.reward_size].mean().item(); idx += self.reward_size
+                total_value_val_loss[i] = loss_vector[:, :, idx:idx + self.value_size].mean().item(); idx += self.value_size
+                total_term_val_loss[i] = loss_vector[:, :, idx:idx + self.term_size].mean().item(); idx += self.term_size
+
+                # policy actions
+                state, actions, y  = self.get_policy_actions_model_input_output(*vars, self.args.model_state_prior_steps, start_t=i, predict=predict)
+                yp, _ = self.run_policy_actions_model(state, actions, predict=predict)
+                loss_vector = F.mse_loss(yp, y, reduction='none')
+
+                idx = 0
+                total_val_loss[i] += loss_vector.mean().item()
+                total_policy_val_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean().item(); idx += self.actions_size
+                total_aa_val_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean().item(); idx += self.actions_size
+
+            self.val_loss = total_val_loss.mean()
+            self.val_r_loss = total_r_val_loss.mean()
+            self.val_T_loss = total_term_val_loss.mean()
+            self.val_p_loss = total_policy_val_loss.mean()
+            self.val_aa_loss = total_aa_val_loss.mean()
+            self.val_v_loss = total_value_val_loss.mean()
+
+            # TODO
+            # if self.args.model_save_val_data:
+            #     # save input_outputs
+            #     if os.path.exists(self.args.episode_dir):
+            #         fname = os.path.join(self.args.episode_dir, f"input_output_{self.save_index + 1:06}.pkl")
+            #         with open(fname, 'wb') as f:
+            #             save_data = {
+            #                 "n_agents": self.args.n_agents,
+            #                 "n_actions": self.args.n_actions,
+            #                 "y": y.cpu(),
+            #                 "yp": yp.cpu(),
+            #                 "val_loss": self.val_loss
+            #             }
+            #             pickle.dump(save_data, f)
+            #         self.save_index += 1
 
         # report losses
         t_step = (time.time() - t_start)
@@ -318,60 +348,63 @@ class ModelMuZeroLearner:
     def _train(self, vars, max_t):
         # learning a termination signal is easier with unmasked input
 
-        self.representation_model.train()
         self.dynamics_model.train()
-        self.actions_model.train()
-        self.policy_model.train()
-        self.term_model.train()
-        self.value_model.train()
+        self.policy_actions_model.train()
+        self.pa_dynamics_model.train()
 
-        rollout_timesteps = self.args.model_rollout_timesteps if self.args.model_rollout_timesteps else 0
-
-        timesteps = list(range(max_t.item() - rollout_timesteps - 2))
-
+        predict = self.args.model_rollout_timesteps
         n = self.args.model_rollout_timestep_samples
-        nt = max_t.item() - rollout_timesteps - 2
+        nt = max_t.item() - predict - 2
         timesteps = [0] + np.random.choice(np.arange(1, nt), n).tolist()
 
-        self.train_loss = np.zeros(n + 1)
-        self.train_r_loss = np.zeros(n + 1)
-        self.train_T_loss = np.zeros(n + 1)
-        self.train_aa_loss = np.zeros(n + 1)
-        self.train_p_loss = np.zeros(n + 1)
-        self.train_v_loss = np.zeros(n + 1)
+        total_train_loss = np.zeros(n + 1)
+        total_r_train_loss = np.zeros(n + 1)
+        total_term_train_loss = np.zeros(n + 1)
+        total_aa_train_loss = np.zeros(n + 1)
+        total_policy_train_loss = np.zeros(n + 1)
+        total_value_train_loss = np.zeros(n + 1)
 
         for i, t in enumerate(timesteps):
 
-            # get data
-            state, actions, y = self.get_model_input_output(*vars, start_t=t, max_t=self.args.model_rollout_timesteps)
-            #print(t, max_t.item(), rollout_timesteps, t + rollout_timesteps, state.size())
-
-            # make predictions
-            yp, _ = self.run_model(state, actions)
-
-            # gradient descent
-            self.optimizer.zero_grad()
+            # dynamics
+            state, actions, y = self.get_dynamics_model_input_output(*vars, self.args.model_state_prior_steps, start_t=t, predict=predict)
+            yp, _ = self.run_dynamics_model(state, actions, predict=predict)
             loss_vector = F.mse_loss(yp, y, reduction='none')
-            loss = loss_vector.mean()
-            loss.backward()
-            self.model_grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.model_grad_clip_norm)
-            self.optimizer.step()
 
-            # record losses
             idx = 0
-            self.train_loss[i] = loss.item()
-            self.train_r_loss[i] = loss_vector[:, :, idx:idx + self.reward_size].mean(); idx += self.reward_size
-            self.train_T_loss[i] = loss_vector[:, :, idx:idx + self.term_size].mean(); idx += self.term_size
-            self.train_aa_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean(); idx += self.actions_size
-            self.train_p_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean(); idx += self.actions_size
-            self.train_v_loss[i] = loss_vector[:, :, idx:idx + self.value_size].mean(); idx += self.value_size
+            total_train_loss[i] = loss_vector.mean().item()
+            total_r_train_loss[i] = loss_vector[:, :, idx:idx + self.reward_size].mean().item(); idx += self.reward_size
+            total_value_train_loss[i] = loss_vector[:, :, idx:idx + self.value_size].mean().item(); idx += self.value_size
+            total_term_train_loss[i] = loss_vector[:, :, idx:idx + self.term_size].mean().item(); idx += self.term_size
 
-        self.train_loss = self.train_loss.mean()
-        self.train_r_loss = self.train_r_loss.mean()
-        self.train_T_loss = self.train_T_loss.mean()
-        self.train_aa_loss = self.train_aa_loss.mean()
-        self.train_p_loss = self.train_p_loss.mean()
-        self.train_v_loss = self.train_v_loss.mean()
+            # update dynamics model params
+            self.dynamics_model_optimizer.zero_grad()
+            loss_vector.mean().backward()
+            self.dynamics_model_grad_norm = torch.nn.utils.clip_grad_norm_(self.dynamics_model_params, self.args.model_grad_clip_norm)
+            self.dynamics_model_optimizer.step()
+
+            # policy actions
+            state, actions, y = self.get_policy_actions_model_input_output(*vars, self.args.model_state_prior_steps, start_t=t, predict=predict)
+            yp, _ = self.run_policy_actions_model(state, actions, predict=predict)
+            loss_vector = F.mse_loss(yp, y, reduction='none')
+
+            idx = 0
+            total_train_loss[i] += loss_vector.mean().item()
+            total_policy_train_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean().item(); idx += self.actions_size
+            total_aa_train_loss[i] = loss_vector[:, :, idx:idx + self.actions_size].mean().item(); idx += self.actions_size
+
+            # update policy action model params
+            self.policy_actions_model_optimizer.zero_grad()
+            loss_vector.mean().backward()
+            self.policy_actions_model_grad_norm = torch.nn.utils.clip_grad_norm_(self.policy_actions_model_params, self.args.model_grad_clip_norm)
+            self.policy_actions_model_optimizer.step()
+
+        self.train_loss = total_train_loss.mean()
+        self.train_r_loss = total_r_train_loss.mean()
+        self.train_T_loss = total_term_train_loss.mean()
+        self.train_aa_loss = total_aa_train_loss.mean()
+        self.train_p_loss = total_policy_train_loss.mean()
+        self.train_v_loss = total_value_train_loss.mean()
 
     def train(self, buffer):
 
@@ -406,7 +439,7 @@ class ModelMuZeroLearner:
             batch = batch[:, :max_ep_t]
 
             vars = self.get_episode_vars(batch)
-            self._validate(vars)
+            self._validate(vars, max_ep_t)
 
             self.epochs = 0
 
@@ -523,33 +556,46 @@ class ModelMuZeroLearner:
         if batch.device != self.device:
             batch.to(self.device)
 
-        batch_size = self.args.model_rollout_batch_size
+        batch_size = 1 #self.args.model_rollout_batch_size
         n_agents, n_actions = self.action_space
 
-        self.target_representation_model.eval()
         self.target_dynamics_model.eval()
-        self.target_policy_model.eval()
+        self.target_policy_actions_model.eval()
 
         with torch.no_grad():
 
             # get real starting states for the batch
             start_s = max(0, t_start - self.args.model_state_prior_steps)
             state = batch["state"][:, start_s:t_start+1, :self.state_size]
-            avail_actions = batch["avail_actions"][:, t_start]
+            actions = batch["actions_onehot"][:, start_s:t_start+1, :].view(1, t_start+1 - start_s, -1)
+            avail_actions = batch["avail_actions"][0, t_start, :].view(1, n_agents, n_actions) # current available actions
 
-            # expand starting states into batch size
-            state = state.repeat(batch_size, 1, 1)
-            avail_actions = avail_actions.repeat(batch_size, 1, 1)
+            # # expand starting states into batch size
+            # state = state.repeat(batch_size, 1, 1)
+            # actions = actions.repeat(batch_size, 1, 1)
 
-            # generate implicit state
-            _, ct = self.target_dynamics_model.init_hidden(batch_size, self.device)  # dynamics model hidden state
-            ht = self.target_representation_model(state)
+            # initialise and warmup models
+            d_ht_ct = self.target_dynamics_model.init_hidden(batch_size, self.device)
+            pa_ht_ct = self.target_pa_dynamics_model.init_hidden(batch_size, self.device)
+
+            warmup = max(0, state.size()[1] - 1)
+            for t in range(0, warmup):
+                at = actions[:, t]
+                d_st = state[:, t]
+                pa_st = state[:, t]
+
+                d_st, _, _, _, d_ht_ct = self.target_dynamics_model(d_st, at, d_ht_ct)
+                pa_st, pa_ht_ct = self.target_pa_dynamics_model(pa_st, at, pa_ht_ct)
+
 
             # initialise root node policy
             if self.args.model_select_action_from_target_policy:
                 initial_priors = self.target_mac.forward(batch, t=t_start).view(batch_size, n_agents, n_actions)
             else:
-                initial_priors = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
+                pa_st = state[:, 0] if warmup == 0 else pa_st
+                d_st = state[:, 0] if warmup == 0 else d_st
+                initial_priors, _ = self.target_policy_actions_model(pa_st)
+                initial_priors = initial_priors.view(batch_size, n_agents, n_actions)
 
             # if t_start == 0:
             #     print("priors=", initial_priors)
@@ -559,7 +605,7 @@ class ModelMuZeroLearner:
             #initial_priors = initial_priors * avail_actions
 
         root.priors = initial_priors
-        root.state = TreeState(ht, ct, avail_actions)
+        root.state = TreeState((d_st, d_ht_ct), (pa_st, pa_ht_ct), avail_actions)
         root.expanded = True
 
     def expand_node(self, node):
@@ -637,35 +683,36 @@ class ModelMuZeroLearner:
 
     def rollout(self, node, actions):
 
-        ht, ct, avail_actions = node.state.totuple()
+        d_state, pa_state, _ = node.state.totuple()
+        d_st, d_ht_ct = d_state
+        pa_st, pa_ht_ct = pa_state
 
         batch_size = self.args.model_rollout_batch_size
         n_agents, n_actions = self.action_space
 
         self.target_dynamics_model.eval()
-        self.target_actions_model.eval()
-        self.target_policy_model.eval()
-        self.target_reward_model.eval()
-        self.target_term_model.eval()
-        self.target_value_model.eval()
+        self.target_policy_actions_model.eval()
+        self.target_pa_dynamics_model.eval()
 
         with torch.no_grad():
 
             # generate next state, reward, termination signal
             actions_onehot = F.one_hot(actions, num_classes=n_actions)
 
-            # step environment
-            ht, ct = self.target_dynamics_model(actions_onehot.view(batch_size, -1).float(), (ht, ct))
+            # step dynamics model for reward, value and term
+            d_st, reward, value, term_signal, d_ht_ct = self.target_dynamics_model(d_st, actions_onehot.view(batch_size, -1).float(), d_ht_ct)
 
-            # post transition predictions
-            reward = self.target_reward_model(ht)
-            value = self.target_value_model(ht)
-            term_signal = self.target_term_model(ht)
-            policy = self.target_policy_model(ht).view(batch_size, n_agents, n_actions)
+            # get policy and avail actions
+            policy, avail_actions = self.target_policy_actions_model(pa_st)
+            policy = policy.view(batch_size, n_agents, n_actions)
+            avail_actions = avail_actions.view(batch_size, n_agents, n_actions)
+            # avail_actions = (avail_actions > self.args.model_action_threshold).int()
 
+            # step policy dynamics
+            pa_st = self.target_pa_dynamics_model(pa_ht_ct)
 
             # # clamp reward
-            # reward[reward < 0] = 0
+            reward[reward < 0] = 0
 
             # generate termination mask
             terminated = (term_signal > self.args.model_term_threshold).item()
@@ -674,9 +721,6 @@ class ModelMuZeroLearner:
             if node.t == self.args.episode_limit - 1:
                 terminated = True
 
-            # generate and threshold avail_actions
-            avail_actions = self.target_actions_model(ht).view(batch_size, n_agents, n_actions)
-            # avail_actions = (avail_actions > self.args.model_action_threshold).int()
 
             # handle cases where no agent actions are available e.g. when agent is dead
             mask = avail_actions.sum(-1) == 0
@@ -684,23 +728,16 @@ class ModelMuZeroLearner:
             source[:, :, 0] = 1  # enable no-op
             avail_actions[mask] = source[mask]
 
-            return policy, value, reward, terminated, TreeState(ht, ct, avail_actions)
+            tree_state = TreeState((d_st, d_ht_ct), (pa_st, pa_ht_ct), avail_actions)
+            return policy, value, reward, terminated, tree_state
 
     def cuda(self):
         if self.dynamics_model:
             self.dynamics_model.cuda()
-        if self.representation_model:
-            self.representation_model.cuda()
-        if self.actions_model:
-            self.actions_model.cuda()
-        if self.policy_model:
-            self.policy_model.cuda()
-        if self.reward_model:
-            self.reward_model.cuda()
-        if self.term_model:
-            self.term_model.cuda()
-        if self.value_model:
-            self.value_model.cuda()
+        if self.policy_actions_model:
+            self.policy_actions_model.cuda()
+        if self.pa_dynamics_model:
+            self.pa_dynamics_model.cuda()
 
         self._update_target_models()
 
@@ -708,7 +745,8 @@ class ModelMuZeroLearner:
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             self.logger.log_stat("model_train_loss", self.train_loss, t_env)
             self.logger.log_stat("model_val_loss", self.val_loss, t_env)
-            self.logger.log_stat("model_grad_norm", self.model_grad_norm.cpu().numpy().item(), t_env)
+            self.logger.log_stat("dynamics_model_grad_norm", self.dynamics_model_grad_norm.cpu().numpy().item(), t_env)
+            self.logger.log_stat("policy_actions_model_grad_norm", self.policy_actions_model_grad_norm.cpu().numpy().item(), t_env)
 
             self.logger.log_stat("model_reward_train_loss", self.train_r_loss, t_env)
             self.logger.log_stat("model_term_train_loss", self.train_T_loss, t_env)

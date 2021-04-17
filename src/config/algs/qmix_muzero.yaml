@@ -25,13 +25,8 @@ hypernet_embed: 64
 # models
 runner: "model_muzero_episode"
 model_learner: "model_muzero"
-dynamics_model_hidden_dim: 64
-representation_model_hidden_dim: 64
-actions_model_hidden_dim: 64
-policy_model_hidden_dim: 64
-reward_model_hidden_dim: 64
-term_model_hidden_dim: 64
-value_model_hidden_dim: 64
+dynamics_model_hidden_dim: 128
+policy_actions_model_hidden_dim: 256
 
 # model learning params
 model_min_samples: 1

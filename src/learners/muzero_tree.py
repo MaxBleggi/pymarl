@@ -21,15 +21,16 @@ class TreeStats():
             return x
 
 class TreeState():
-    # this is a set of tensors representing the dynimacis model hidden state, available actions and termination status
-    def __init__(self, ht, ct, avail_actions):
+    # this is a set of tensors representing the dynamics model hidden state, available actions and termination status
+    def __init__(self, d_state, pa_state, avail_actions):
 
-        self.ht = ht
-        self.ct = ct
+
+        self.d_st, self.d_ht_ct = d_state
+        self.pa_st, self.pa_ht_ct = pa_state
         self.avail_actions = avail_actions
 
     def totuple(self):
-        return (self.ht, self.ct, self.avail_actions)
+        return ((self.d_st, self.d_ht_ct), (self.pa_st, self.pa_ht_ct), self.avail_actions)
 
 class Node():
 
