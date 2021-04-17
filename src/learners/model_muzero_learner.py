@@ -507,7 +507,8 @@ class ModelMuZeroLearner:
 
     def select_epsilon_greedy_action(self, parent, t_env):
 
-        "epsilion greed with respect to parent priors"
+        # tree policy
+        # epsilion greed with respect to parent priors
 
         batch_size = self.args.model_rollout_batch_size
         avail_actions = parent.state.avail_actions
@@ -669,16 +670,16 @@ class ModelMuZeroLearner:
         # select greedy action
         actions, policy = self.select_action(root, t_env=t_env, greedy=False)
         # if t_start == 0:
-        if True:
-            # root.summary()
-            # print("aa=", root.state.avail_actions)
-            print("priors=", root.priors)
-            print("visits=", root.child_visits)
-            # print("rewards=", root.child_rewards)
-            print("values=", root.action_values)
-            # policy = root.child_rewards + self.args.gamma * self.tree_stats.normalize(root.action_values)
-            print("policy=", policy)
-            print("selected=", actions.flatten().tolist())
+        # if True:
+        #     # root.summary()
+        #     # print("aa=", root.state.avail_actions)
+        #     print("priors=", root.priors)
+        #     print("visits=", root.child_visits)
+        #     # print("rewards=", root.child_rewards)
+        #     print("values=", root.action_values)
+        #     # policy = root.child_rewards + self.args.gamma * self.tree_stats.normalize(root.action_values)
+        #     print("policy=", policy)
+        #     print("selected=", actions.flatten().tolist())
 
         return actions, policy
 
