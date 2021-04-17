@@ -40,7 +40,7 @@ model_log_epochs: 10
 model_bootstrap_timesteps: 50 # n in the n-step return estimate
 model_rollout_timesteps: 5 # number of timesteps to simulate during model training
 model_rollout_timestep_samples: 10
-model_mcts_simulations: 0
+model_mcts_simulations: 50
 model_state_prior_steps: 10 # number of prior timesteps to use for encoding state
 model_dirichlet_alpha: 0.25
 model_add_exploration_noise: False
@@ -48,7 +48,7 @@ model_select_action_from_target_policy: False # use qmix etc for action selectio
 model_predict_target_policy: True # muzero estimates the qmix etc policy otherwise use the mcts visit count etc distribution
 model_mcts_tree_policy: "epsilon_greedy" # 'epsilon_greedy' or 'ucb'
 model_mcts_tree_policy_metric: "priors" # priors, counts, values # only applies to model_mcts_tree_policy=epsilon_greedy
-model_mcts_root_policy_metric: "priors" # priors=target policy, counts=visit count distribution, values=mcts action values
+model_mcts_root_policy_metric: "counts" # priors=target policy, counts=visit count distribution, values=mcts action values
 
 # rollouts
 model_rollout_batch_size: 1 # for this to be bigger we would need to generate more candidate actions (ie expand multiple child nodes)
@@ -72,3 +72,4 @@ model_save_val_data: True
 #episode_dir: "/home/ubuntu/masters/experiments/model-learning/1/val_data"
 
 name: "qmix-muzero"
+use_cuda: False

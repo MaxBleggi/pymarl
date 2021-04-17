@@ -668,14 +668,15 @@ class ModelMuZeroLearner:
 
         # select greedy action
         actions, policy = self.select_action(root, t_env=t_env, greedy=False)
-        if t_start == 0:
+        # if t_start == 0:
+        if True:
             # root.summary()
             # print("aa=", root.state.avail_actions)
             print("priors=", root.priors)
             print("visits=", root.child_visits)
             # print("rewards=", root.child_rewards)
             print("values=", root.action_values)
-            policy = root.child_rewards + self.args.gamma * self.tree_stats.normalize(root.action_values)
+            # policy = root.child_rewards + self.args.gamma * self.tree_stats.normalize(root.action_values)
             print("policy=", policy)
             print("selected=", actions.flatten().tolist())
 
@@ -706,10 +707,11 @@ class ModelMuZeroLearner:
             policy, avail_actions = self.target_policy_actions_model(pa_st)
             policy = policy.view(batch_size, n_agents, n_actions)
             avail_actions = avail_actions.view(batch_size, n_agents, n_actions)
+            avail_actions[avail_actions < 0] = 0
             # avail_actions = (avail_actions > self.args.model_action_threshold).int()
 
             # step policy dynamics
-            pa_st = self.target_pa_dynamics_model(pa_ht_ct)
+            pa_st, pa_ht_ct = self.target_pa_dynamics_model(pa_st, actions_onehot.view(batch_size, -1).float(), pa_ht_ct)
 
             # # clamp reward
             reward[reward < 0] = 0
