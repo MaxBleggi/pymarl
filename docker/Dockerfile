@@ -9,7 +9,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 # Install python3
-RUN apt-get -y install python3 python3.8-pip
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y \
+    python3.8 python3-pip python3.8-dev
 RUN pip3 install --upgrade pip setuptools
 RUN pip3 install -r requirements.txt
 
