@@ -1,5 +1,5 @@
 FROM nvidia/cuda:9.2-cudnn7-devel-ubuntu16.04
-LABEL authors="Sina Masoud-Ansari, Tabish Rashid"
+LABEL authors="Sina Masoud-Ansari, Tabish Rashid modidied by max bleggi"
 
 ENV SC2PATH /pymarl/3rdparty/StarCraftII
 
